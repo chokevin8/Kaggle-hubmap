@@ -1,10 +1,20 @@
-tqdm
-scipy
-opencv-python
-scipy
+#pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu117
+# run above first!
+numpy
 pandas
+scipy
+tqdm
+opencv-python
+matplotlib
 Pillow
 jupyter
-rasterio
-# pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu117
-# timm #download after torch
+timm
+ultralytics
+scikit-image
+visdom
+imgaug
+lmdb
+imageio
+openpyxl
+pyyaml
+fitter
