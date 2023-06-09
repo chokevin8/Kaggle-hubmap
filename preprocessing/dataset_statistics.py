@@ -192,7 +192,7 @@ yaml_save_path = "{}/{}.yaml".format(
     if args.dataset_name != ""
     else "dataset_{}_random{}_n{}".format(args.color_space, args.random, args.n),
 )
-yaml_save_path = r"C:\Users\Kevin\PycharmProjects\hubmap\randstain_train\randstainna.yaml"
+yaml_save_path = r"C:\Users\Kevin\PycharmProjects\hubmap\preprocessing\randstainna.yaml"
 with open(yaml_save_path, "w") as f:
     yaml.dump(yaml_dict_lab, f)
     print("The dataset lab statistics has been saved in {}".format(yaml_save_path))
