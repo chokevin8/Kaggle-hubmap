@@ -1,6 +1,6 @@
 
-train: \\fatherserverdw\Kevin\hubmap\yolov8_v2_randstain\train\images
-val: \\fatherserverdw\Kevin\hubmap\yolov8_v2_randstain\val\images
+train: \\fatherserverdw\Kevin\hubmap\yolov8_v2\train\images
+val: \\fatherserverdw\Kevin\hubmap\yolov8_v2\val\images
 
 names:
     0: blood_vessel
