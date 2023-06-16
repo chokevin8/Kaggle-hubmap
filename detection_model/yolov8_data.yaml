@@ -1,8 +1,0 @@
-
-train: \\fatherserverdw\Kevin\hubmap\yolov8\train\images
-val: \\fatherserverdw\Kevin\hubmap\yolov8\val\images
-
-names:
-    0: blood_vessel
-
-nc: 1
