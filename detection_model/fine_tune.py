@@ -20,10 +20,15 @@ def set_seed(seed = 42):
 
 set_seed(seed=42)
 
+#
+# tune_space = {"lr0": tune.grid_search([1e-3,1e-2]),'cos_lr': tune.grid_search([True,False]),
+#               'optimizer': tune.grid_search(["Adam","SGD"]),
+#               'mosaic': tune.grid_search([0.0,1.0]), 'pretrained': tune.grid_search([True,False])} # 2^5 = 32
 
-tune_space = {"lr0": tune.grid_search([1e-3,1e-2]),'cos_lr': tune.grid_search([True,False]),
-              'optimizer': tune.grid_search(["Adam","SGD"]),
-              'mosaic': tune.grid_search([0.0,1.0]), 'pretrained': tune.grid_search([True,False])} # 2^5 = 32
+tune_space = {"lrf": tune.grid_search([1e-3,1e-2,1e-1]),'momentum': tune.grid_search([0.837,0.937]),
+              'agnostic_nms': tune.grid_search([False,True]),
+              'iou': tune.grid_search([0.5,0.6,0.7])}
+
 
 model3 = YOLO('yolov8n-seg.pt')
 results = model3.tune(data=r'C:\Users\Kevin\PycharmProjects\hubmap\detection_model\yolov8_v2_data.yaml',
