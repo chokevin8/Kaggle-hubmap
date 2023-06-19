@@ -1,0 +1,85 @@
+A:
+  avg:
+    distribution: norm
+    mean: 162.05
+    std: 6.501
+  std:
+    distribution: norm
+    mean: 11.281
+    std: 2.19
+B:
+  avg:
+    distribution: norm
+    mean: 108.921
+    std: 7.309
+  std:
+    distribution: norm
+    mean: 7.362
+    std: 1.948
+L:
+  avg:
+    distribution: norm
+    mean: 137.193
+    std: 16.589
+  std:
+    distribution: norm
+    mean: 38.404
+    std: 6.284
+D:
+  avg:
+    distribution: laplace
+    mean: 0.027
+    std: 0.008
+  std:
+    distribution: laplace
+    mean: 0.014
+    std: 0.004
+E:
+  avg:
+    distribution: norm
+    mean: 0.037
+    std: 0.015
+  std:
+    distribution: norm
+    mean: 0.029
+    std: 0.015
+H:
+  avg:
+    distribution: norm
+    mean: 0.032
+    std: 0.01
+  std:
+    distribution: laplace
+    mean: 0.015
+    std: 0.006
+h:
+  avg:
+    distribution: norm
+    mean: 153.67
+    std: 6.668
+  std:
+    distribution: norm
+    mean: 3.646
+    std: 0.828
+S:
+  avg:
+    distribution: norm
+    mean: 107.558
+    std: 23.62
+  std:
+    distribution: norm
+    mean: 44.984
+    std: 9.903
+V:
+  avg:
+    distribution: norm
+    mean: 173.535
+    std: 11.647
+  std:
+    distribution: norm
+    mean: 30.489
+    std: 4.755
+color_space: Random
+methods: Reinhard
+n_each_class: 0
+random: true
