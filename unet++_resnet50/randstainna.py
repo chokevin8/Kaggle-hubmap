@@ -47,8 +47,8 @@ class RandStainNA(object):
 
         self.yaml_file = yaml_file
         cfg = get_yaml_data(self.yaml_file)
+        cfg["color_space"] = np.random.choice(["LAB", "HED", "HSV"])# only this line inserted by kevin
         c_s = cfg["color_space"]
-
         self._channel_avgs = {
             "avg": [
                 cfg[c_s[0]]["avg"]["mean"],

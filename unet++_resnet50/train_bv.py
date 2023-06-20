@@ -33,6 +33,7 @@ import segmentation_models_pytorch as smp
 from torchvision.models.resnet import Bottleneck, ResNet
 from torchvision import transforms
 from randstainna import RandStainNA
+import pickle
 
 #%%
 # load train_df for blood_vessel:
@@ -107,10 +108,10 @@ if find_mean_std_dataset:
 # model configs, note that key is for the different type of resnet50's available for use from lunit
 class model_config:
     seed = 42
-    key = "MoCoV2"
+    key = "BT" #"MoCoV2"
     train_batch_size = 16
     valid_batch_size = 16
-    epochs = 35 # ~24 minutes per 10 epoch for 1 fold
+    epochs = 50 # ~24 minutes per 10 epoch for 1 fold
     CV_fold = 5
     learning_rate = 0.001
     scheduler = "CosineAnnealingLR"
@@ -124,7 +125,7 @@ class model_config:
     dice_alpha = 0.5
     bce_alpha = 0.5
     model_save_directory = os.path.join(os.getcwd(), "model",
-                                        str(key) + "attention_dropout_dilated")  #assuming os.getcwd is the current training script directory
+                                        str(key) + "BT_attention_dropout_dilation_randstain")  #assuming os.getcwd is the current training script directory
 #%%
 # sets the seed of the entire notebook so results are the same every time we run for reproducibility. no randomness, everything is controlled.
 def set_seed(seed=42):
@@ -155,33 +156,37 @@ grouped = new_df_train.groupby(['fold','source_wsi'])
 grouped.fold.count()
 # we can see similar distribution
 #%%
-# randstain pipeline:
-# train_transforms = transforms.Compose([transforms.ToPILImage(),
-#     transforms.ColorJitter(brightness = 0.2, contrast = 0.2, saturation = 0.2, hue = 0.1), # p changed from previous randstainna methods
-#     transforms.RandomGrayscale(p=0.2), # p changed from previous randstainna methods
-#     RandStainNA( # p changed from previous randstainna methods
-#         yaml_file="randstainna.yaml",
-#         std_hyper=-0.3,
-#         probability=0.8,
-#         probability=0.8,
-#         distribution="normal",
-#         is_train=True
-#     )
-# ])
-
+# randstain pipeline, test if empty val_trnasforms is better or including just randstain is better
+train_transforms = transforms.Compose([transforms.ToPILImage(),
+    transforms.ColorJitter(brightness = 0.2, contrast = 0.2, saturation = 0.2, hue = 0.1), # p changed from previous randstainna methods
+    transforms.RandomGrayscale(p=0.2), # p changed from previous randstainna methods
+    RandStainNA( # p changed from previous randstainna methods
+        yaml_file="randstainna_all.yaml",
+        std_hyper=-0.3,
+        probability=0.8,
+        distribution="normal",
+        is_train=True
+    )
+])
+val_transforms = transforms.Compose([RandStainNA( # p changed from previous randstainna methods
+        yaml_file="randstainna_all.yaml",
+        std_hyper=-0.3,
+        probability=0.8,
+        distribution="normal",
+        is_train=True
+    )])
 
 # # no randstain pipeline:
-train_transforms = A.Compose([
-    A.ColorJitter(brightness = 0.2, contrast = 0.01, saturation = 0.01, hue = 0.01, p = 0.8),
-    A.ToGray(p=0.2),
-    A.HorizontalFlip(p=0.5),
-    A.VerticalFlip(p=0.5),
-    A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)),
-    ToTensorV2() #V2 converts tensor to CHW automatically
-])
-val_transforms = A.Compose([A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)), ToTensorV2()])
-# val_transforms = A.Compose([A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)),
-#     ToTensorV2(),])
+# train_transforms = A.Compose([
+#     A.ColorJitter(brightness = 0.2, contrast = 0.01, saturation = 0.01, hue = 0.01, p = 0.8),
+#     A.ToGray(p=0.2),
+#     A.HorizontalFlip(p=0.5),
+#     A.VerticalFlip(p=0.5),
+#     A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)),
+#     ToTensorV2() #V2 converts tensor to CHW automatically
+# ])
+# val_transforms = A.Compose([A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)), ToTensorV2()])
+
 #%%
 import torchvision.transforms.functional as F
 #%%
@@ -207,27 +212,27 @@ class TrainDataSet(Dataset):
             mask = np.array(mask)
         if self.transforms is not None: #albumentations vs torchvision difference:
             # torchvision (randstain):
-            # image = self.transforms(image)
-            # #apply horizontal and vertical flips to image and mask
-            # if np.random.rand() < 0.5:
-            #     image = np.flipud(image) #vertical
-            #     mask = np.flipud(mask)
-            # if np.random.rand() < 0.5:
-            #     image = np.fliplr(image) #horizontal
-            #     mask = np.fliplr(mask)
-            # # Convert image and mask to tensors
-            # image = np.ascontiguousarray(image)
-            # image = np.transpose(image,(2,0,1))
-            # mask = np.ascontiguousarray(mask)
-            # image = torch.from_numpy(image.copy())#.float()
-            # mask = torch.from_numpy(mask.copy()).unsqueeze(0)#.to(torch.uint8)
-            #albumentation (no randstain):
-            transformed = self.transforms(image=image,mask=mask)
-            image = transformed['image']
-            mask = transformed['mask']
-            mask = mask.unsqueeze(0)
+            image = self.transforms(image)
+            #apply horizontal and vertical flips to image and mask
+            if np.random.rand() < 0.5:
+                image = np.flipud(image) #vertical
+                mask = np.flipud(mask)
+            if np.random.rand() < 0.5:
+                image = np.fliplr(image) #horizontal
+                mask = np.fliplr(mask)
+            # Convert image and mask to tensors
+            image = np.ascontiguousarray(image)
+            image = np.transpose(image,(2,0,1))
+            mask = np.ascontiguousarray(mask)
+            image = torch.from_numpy(image.copy())#.float()
+            mask = torch.from_numpy(mask.copy()).unsqueeze(0)#.to(torch.uint8)
+            # #albumentation (no randstain):
+            # transformed = self.transforms(image=image,mask=mask)
+            # image = transformed['image']
+            # mask = transformed['mask']
+            # mask = mask.unsqueeze(0)
             # # image = torch.float 32, mask = torch.uint8
-        # if self.transforms is None: # onnly for torchvision (randstain), for validation.
+        # if self.transforms is None: # only for torchvision (randstain), for validation if no val_transforms
         #     image = np.transpose(image, (2, 0, 1))
         #     image = torch.from_numpy(image)
         #     mask = torch.from_numpy(mask).unsqueeze(0)
@@ -282,7 +287,7 @@ def visualize_images(dataset, num_images=5):
 
     plt.show()
 #%%
-visualize = False
+visualize = False # need to fix code since visualize will return errors
 if visualize:
     original_dataset = TrainDataSet(df=new_df_train,transforms=None)
     visualize_images(original_dataset, num_images=5)
@@ -332,7 +337,7 @@ def resnet50(pretrained, progress, key, **kwargs):
 #
 # if __name__ == "__main__":
     # initialize resnet50 trunk using BT pre-trained weight
-model_backbone = resnet50(pretrained=True, progress=False, key=model_config.key)
+# model_backbone = resnet50(pretrained=True, progress=False, key=model_config.key)
 #%%
 pretrained_url = get_pretrained_url(model_config.key)
 #%%
@@ -340,9 +345,14 @@ pretrained_url = get_pretrained_url(model_config.key)
 # model_backbone
 #%%
 def build_model():
-    model = smp.UnetPlusPlus(encoder_name="resnet50", encoder_weights=model_config.key, activation=None,
+    pretrained_resnet = True #flag
+    if pretrained_resnet:
+        model = smp.UnetPlusPlus(encoder_name="resnet50", encoder_weights=model_config.key, activation=None,
                              in_channels=3, classes=1, decoder_attention_type = "scse", decoder_use_batchnorm=True, aux_params={"classes": 1, "pooling": "max","dropout": 0.5})
-
+    else:
+        model = smp.UnetPlusPlus(encoder_name="resnet50", encoder_weights=None, activation=None,
+                                 in_channels=3, classes=1, decoder_attention_type="scse", decoder_use_batchnorm=True,
+                                 aux_params={"classes": 1, "pooling": "max", "dropout": 0.5})
     model.to(model_config.device)  # model to gpu
     return model
 #%%
@@ -469,6 +479,7 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
 
     for epoch in range(1, num_epochs + 1):
         gc.collect()
+        print("Current Epoch {} / Total Epoch {}".format(epoch,num_epochs))
         print(f'Epoch {epoch}/{num_epochs}', end='')
         train_loss = epoch_train(model, optimizer, scheduler,
                                            dataloader=train_dataloader,
@@ -540,6 +551,8 @@ for fold in range(model_config.CV_fold):
     model, history = run_training(model, optimizer, scheduler,
                                   device=model_config.device,
                                   num_epochs=model_config.epochs)
-    print(history)
-    # write code to save history?
+    pkl_save_path = os.path.join(model_config.model_save_directory,'history.pickle')
+    #save history:
+    with open(pkl_save_path, 'wb') as file:
+        pickle.dump(history, file)
 #%%
