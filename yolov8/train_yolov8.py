@@ -63,7 +63,7 @@ if __name__ == '__main__':
 #             glomerulus        325        100      0.787       0.66      0.722      0.622      0.805      0.659      0.724      0.626
 
 ### Below results are for yolov8_v3 dataset and for yolov8x:
-    model_seg.train(data=r'C:\Users\Kevin\PycharmProjects\hubmap\yolov8\yolov8_v3_data.yaml'
+    model_seg.train(data=r'C:\Users\Kevin\PycharmProjects\hubmap\yolov8\yolov8_v2_data.yaml'
                     ,device = 0, batch = 16 ,epochs=300, imgsz = 512, verbose = True, deterministic = True,
                     name = 'yolov8_v3_seg_yolov8x_, no randstain', cfg='default.yaml')
 

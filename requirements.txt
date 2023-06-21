@@ -21,3 +21,4 @@ fitter
 segmentation-models-pytorch
 imagecodecs
 pycocotools
+pyvips
