@@ -22,3 +22,4 @@ segmentation-models-pytorch
 imagecodecs
 pycocotools
 pyvips
+"ray[tune]"
