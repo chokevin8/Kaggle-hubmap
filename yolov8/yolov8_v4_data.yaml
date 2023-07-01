@@ -1,0 +1,9 @@
+
+train: \\fatherserverdw\Kevin\hubmap\yolov8_v4\train_fold2\images
+val: \\fatherserverdw\Kevin\hubmap\yolov8_v4\val_fold2\images
+
+names:
+    0: blood_vessel
+    1: glomerulus
+cls_weights:  [1,60] #consider altering weights or removing it
+nc: 2
