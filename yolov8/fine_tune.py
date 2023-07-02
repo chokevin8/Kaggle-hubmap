@@ -39,3 +39,5 @@ results = model3.tune(data=r'C:\Users\labuser\hubmap\yolov8\yolov8_v2_data.yaml'
                       space = tune_space, gpu_per_trial = 1,grace_period = 30, max_samples = 2, train_args =
                       {"device": 0, "epochs" : 300, "imgsz": 512, "verbose" :True, "deterministic" : True,
                        'cfg':'default.yaml'}) # no randstain, baseline yolov8 model, but with yolov8x
+# was terminated early for epoch 873/972, but after analyzing result, best parameter for trial 3 is (rest of result is
+# saved in excel.

@@ -73,6 +73,6 @@ if __name__ == '__main__':
 #           blood_vessel         42        337      0.834     0.0747      0.329      0.166      0.834     0.0747      0.323      0.151
 #             glomerulus         42          3      0.819      0.667      0.666      0.633      0.819      0.667      0.666      0.534
 
-    model_det.train(data=r'C:\Users\Kevin\PycharmProjects\hubmap\yolov8\yolov8_v4_data.yaml'
+    model_det.train(data=r'C:\Users\labuser\hubmap\yolov8\yolov8_v4_data.yaml'
                     ,device = 0, batch = 16 ,epochs=300, imgsz = 512, verbose = True, deterministic = True,
-                    name = 'yolov8_v4_seg_yolov8x_,more_augs, fold2', cfg='default.yaml')
+                    name = 'yolov8_v4_seg_yolov8x_,more_augs, fold3', cfg='default.yaml')
