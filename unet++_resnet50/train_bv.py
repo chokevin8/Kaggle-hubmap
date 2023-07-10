@@ -109,11 +109,11 @@ if find_mean_std_dataset:
 class model_config:
     seed = 42
     key = "BT" #"MoCoV2"
-    train_batch_size = 16
+    train_batch_size = 8
     valid_batch_size = 16
-    epochs = 50 # ~24 minutes per 10 epoch for 1 fold
+    epochs = 2 # ~24 minutes per 10 epoch for 1 fold
     CV_fold = 5
-    learning_rate = 0.001
+    learning_rate = 0.0014 #0.001 for bs 16
     scheduler = "CosineAnnealingLR"
     num_training_samples = 1300
     T_max = int(num_training_samples/ train_batch_size * epochs)  # number of iterations for a full cycle, need to change for different # of iterations. (iteration = batch size)
@@ -125,7 +125,7 @@ class model_config:
     dice_alpha = 0.5
     bce_alpha = 0.5
     model_save_directory = os.path.join(os.getcwd(), "model",
-                                        str(key) + "BT_attention_dropout_dilation_randstain")  #assuming os.getcwd is the current training script directory
+                                        str(key) + "no_pretrained_seresnext_dilated_dropout_norandstain_test")  #assuming os.getcwd is the current training script directory
 #%%
 # sets the seed of the entire notebook so results are the same every time we run for reproducibility. no randomness, everything is controlled.
 def set_seed(seed=42):
@@ -157,35 +157,35 @@ grouped.fold.count()
 # we can see similar distribution
 #%%
 # randstain pipeline, test if empty val_trnasforms is better or including just randstain is better
-train_transforms = transforms.Compose([transforms.ToPILImage(),
-    transforms.ColorJitter(brightness = 0.2, contrast = 0.2, saturation = 0.2, hue = 0.1), # p changed from previous randstainna methods
-    transforms.RandomGrayscale(p=0.2), # p changed from previous randstainna methods
-    RandStainNA( # p changed from previous randstainna methods
-        yaml_file="randstainna_all.yaml",
-        std_hyper=-0.3,
-        probability=0.8,
-        distribution="normal",
-        is_train=True
-    )
-])
-val_transforms = transforms.Compose([RandStainNA( # p changed from previous randstainna methods
-        yaml_file="randstainna_all.yaml",
-        std_hyper=-0.3,
-        probability=0.8,
-        distribution="normal",
-        is_train=True
-    )])
+# train_transforms = transforms.Compose([transforms.ToPILImage(),
+#     transforms.ColorJitter(brightness = 0.2, contrast = 0.2, saturation = 0.2, hue = 0.1), # p changed from previous randstainna methods
+#     transforms.RandomGrayscale(p=0.2), # p changed from previous randstainna methods
+#     RandStainNA( # p changed from previous randstainna methods
+#         yaml_file="randstainna_all.yaml",
+#         std_hyper=-0.3,
+#         probability=0.8,
+#         distribution="normal",
+#         is_train=True
+#     )
+# ])
+# val_transforms = transforms.Compose([RandStainNA( # p changed from previous randstainna methods
+#         yaml_file="randstainna_all.yaml",
+#         std_hyper=-0.3,
+#         probability=0.8,
+#         distribution="normal",
+#         is_train=True
+#     )])
 
 # # no randstain pipeline:
-# train_transforms = A.Compose([
-#     A.ColorJitter(brightness = 0.2, contrast = 0.01, saturation = 0.01, hue = 0.01, p = 0.8),
-#     A.ToGray(p=0.2),
-#     A.HorizontalFlip(p=0.5),
-#     A.VerticalFlip(p=0.5),
-#     A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)),
-#     ToTensorV2() #V2 converts tensor to CHW automatically
-# ])
-# val_transforms = A.Compose([A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)), ToTensorV2()])
+train_transforms = A.Compose([
+    A.ColorJitter(brightness = 0.2, contrast = 0.01, saturation = 0.01, hue = 0.01, p = 0.8),
+    A.ToGray(p=0.2),
+    A.HorizontalFlip(p=0.5),
+    A.VerticalFlip(p=0.5),
+    A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)),
+    ToTensorV2() #V2 converts tensor to CHW automatically
+])
+val_transforms = A.Compose([A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)), ToTensorV2()])
 
 #%%
 import torchvision.transforms.functional as F
@@ -212,25 +212,25 @@ class TrainDataSet(Dataset):
             mask = np.array(mask)
         if self.transforms is not None: #albumentations vs torchvision difference:
             # torchvision (randstain):
-            image = self.transforms(image)
-            #apply horizontal and vertical flips to image and mask
-            if np.random.rand() < 0.5:
-                image = np.flipud(image) #vertical
-                mask = np.flipud(mask)
-            if np.random.rand() < 0.5:
-                image = np.fliplr(image) #horizontal
-                mask = np.fliplr(mask)
-            # Convert image and mask to tensors
-            image = np.ascontiguousarray(image)
-            image = np.transpose(image,(2,0,1))
-            mask = np.ascontiguousarray(mask)
-            image = torch.from_numpy(image.copy())#.float()
-            mask = torch.from_numpy(mask.copy()).unsqueeze(0)#.to(torch.uint8)
+            # image = self.transforms(image)
+            # #apply horizontal and vertical flips to image and mask
+            # if np.random.rand() < 0.5:
+            #     image = np.flipud(image) #vertical
+            #     mask = np.flipud(mask)
+            # if np.random.rand() < 0.5:
+            #     image = np.fliplr(image) #horizontal
+            #     mask = np.fliplr(mask)
+            # # Convert image and mask to tensors
+            # image = np.ascontiguousarray(image)
+            # image = np.transpose(image,(2,0,1))
+            # mask = np.ascontiguousarray(mask)
+            # image = torch.from_numpy(image.copy())#.float()
+            # mask = torch.from_numpy(mask.copy()).unsqueeze(0)#.to(torch.uint8)
             # #albumentation (no randstain):
-            # transformed = self.transforms(image=image,mask=mask)
-            # image = transformed['image']
-            # mask = transformed['mask']
-            # mask = mask.unsqueeze(0)
+            transformed = self.transforms(image=image,mask=mask)
+            image = transformed['image']
+            mask = transformed['mask']
+            mask = mask.unsqueeze(0)
             # # image = torch.float 32, mask = torch.uint8
         # if self.transforms is None: # only for torchvision (randstain), for validation if no val_transforms
         #     image = np.transpose(image, (2, 0, 1))
@@ -345,52 +345,138 @@ pretrained_url = get_pretrained_url(model_config.key)
 # model_backbone
 #%%
 def build_model():
-    pretrained_resnet = True #flag
+    pretrained_resnet = False #flag
     if pretrained_resnet:
         model = smp.UnetPlusPlus(encoder_name="resnet50", encoder_weights=model_config.key, activation=None,
                              in_channels=3, classes=1, decoder_attention_type = "scse", decoder_use_batchnorm=True, aux_params={"classes": 1, "pooling": "max","dropout": 0.5})
     else:
-        model = smp.UnetPlusPlus(encoder_name="resnet50", encoder_weights=None, activation=None,
+        model = smp.UnetPlusPlus(encoder_name="se_resnext50_32x4d", encoder_weights=None, activation=None,
                                  in_channels=3, classes=1, decoder_attention_type="scse", decoder_use_batchnorm=True,
                                  aux_params={"classes": 1, "pooling": "max", "dropout": 0.5})
     model.to(model_config.device)  # model to gpu
     return model
 #%%
 #%%
-dice_loss_func = smp.losses.DiceLoss(mode='binary')
-bce_loss_func = smp.losses.SoftBCEWithLogitsLoss()
+# dice_loss_func = smp.losses.DiceLoss(mode='binary')
+# bce_loss_func = smp.losses.SoftBCEWithLogitsLoss()
 iou_loss_func = smp.losses.JaccardLoss(mode='binary')
 #%%
 def loss_func(y_pred,y_true): #weighted avg of the two, maybe explore different weighting if possible?
     return iou_loss_func(y_pred,y_true)
     # return  model_config.dice_alpha* dice_loss_func(y_pred,y_true) + model_config.bce_alpha * bce_loss_func(y_pred,y_true)
 #%
-def dice_coef(y_true, y_pred, thr=0.5, dim=(2,3), epsilon=0.001):
-    y_true = y_true.to(torch.float32)
-    y_pred = (y_pred>thr).to(torch.float32) # binary tensor
-    intersection = (y_true*y_pred).sum(dim=dim) # calculate overlapping pixels b/w pred and true for height and width
-    den = y_true.sum(dim=dim) + y_pred.sum(dim=dim) # denominator, A+B along height and width
-    dice = ((2*intersection+epsilon)/(den+epsilon)).mean(dim=(1,0)) # avg over batch & channel to return scalar
-    return dice
-from sklearn.metrics import precision_recall_curve, average_precision_score
+# def dice_coef(y_true, y_pred, thr=0.5, dim=(2,3), epsilon=0.001):
+#     y_true = y_true.to(torch.float32)
+#     y_pred = (y_pred>thr).to(torch.float32) # binary tensor
+#     intersection = (y_true*y_pred).sum(dim=dim) # calculate overlapping pixels b/w pred and true for height and width
+#     den = y_true.sum(dim=dim) + y_pred.sum(dim=dim) # denominator, A+B along height and width
+#     dice = ((2*intersection+epsilon)/(den+epsilon)).mean(dim=(1,0)) # avg over batch & channel to return scalar
+#     return dice
 
-def calculate_mean_average_precision(y_true, y_pred, threshold=0.5):
-    # Apply threshold to y_pred
-    y_pred = (y_pred > threshold).to(torch.float32)
-    # Flatten the tensors and convert to numpy arrays
-    y_true = y_true.flatten().cpu().numpy()
-    y_pred = y_pred.flatten().cpu().numpy()
-    # Filter out the background class (pixel = 0)
-    foreground_indices = np.where(y_true == 1)
-    y_true = y_true[foreground_indices]
-    y_pred = y_pred[foreground_indices]
-    # Compute precision and recall
-    precision, recall, _ = precision_recall_curve(y_true, y_pred)
-    # Calculate average precision for the foreground class
-    average_precision = average_precision_score(y_true, y_pred)
 
-    return average_precision
-#%%
+def compute_iou(labels, y_pred, thr = 0.5):
+    """
+    Computes the IoU for instance labels and predictions.
+
+    Args:
+        labels (np array): Labels.
+        y_pred (np array): predictions
+
+    Returns:
+        np array: IoU matrix, of size true_objects x pred_objects.
+    """
+
+    true_objects = len(np.unique(labels)) # 0 or 1, so 2
+    print("y_pred is {} and has length {} and first element has length {} before thr".format(y_pred, len(y_pred), y_pred[0].shape))
+    y_pred = y_pred > thr
+    # y_pred = y_pred.astype(bool)
+    pred_objects = len(np.unique(y_pred)) # 0 or 1, so 2
+    print("number of true objects is {}".format(true_objects))
+    print("number of pred objects is {}".format(pred_objects))
+    print("label is {} and has length {} and first element has length {}".format(labels,len(labels),labels[0].shape))
+    print("y_pred is {} and has length {} and first element has length {}".format(y_pred, len(y_pred), y_pred[0].shape))
+    # Compute intersection between all objects
+    intersection = np.histogram2d(
+        labels.flatten(), y_pred.flatten(), bins=(true_objects, pred_objects)
+    )[0]
+
+    # Compute areas (needed for finding the union between all objects)
+    area_true = np.histogram(labels, bins=true_objects)[0]
+    area_pred = np.histogram(y_pred, bins=pred_objects)[0]
+    area_true = np.expand_dims(area_true, -1)
+    area_pred = np.expand_dims(area_pred, 0)
+
+    # Compute union
+    union = area_true + area_pred - intersection
+    iou = intersection / union
+
+    return iou[1:, 1:]
+
+def precision_at(threshold, iou):
+    """
+    Computes the precision at a given threshold.
+
+    Args:
+        threshold (float): Threshold.
+        iou (np array [n_truths x n_preds]): IoU matrix.
+
+    Returns:
+        int: Number of true positives,
+        int: Number of false positives,
+        int: Number of false negatives.
+    """
+    matches = iou > threshold
+    true_positives = np.sum(matches, axis=1) >= 1  # Correct objects
+    false_negatives = np.sum(matches, axis=1) == 0  # Missed objects
+    false_positives = np.sum(matches, axis=0) == 0  # Extra objects
+    tp, fp, fn = (
+        np.sum(true_positives),
+        np.sum(false_positives),
+        np.sum(false_negatives),
+    )
+    return tp, fp, fn
+
+
+def iou_map(truths, preds, verbose=0):
+    """
+    Computes the metric for the competition.
+    Masks contain the segmented pixels where each object has one value associated,
+    and 0 is the background.
+
+    Args:
+        truths (list of masks): Ground truths.
+        preds (list of masks): Predictions.
+        verbose (int, optional): Whether to print infos. Defaults to 0.
+
+    Returns:
+        float: mAP.
+    """
+    ious = [compute_iou(truth, pred, thr = 0.5) for truth, pred in zip(truths, preds)]
+
+    print(ious[0].shape)
+
+    if verbose:
+        print("Thresh\tTP\tFP\tFN\tPrec.")
+
+    prec = []
+    t = 0.6 # iou threshold evaluated at 0.6
+    tps, fps, fns = 0, 0, 0
+    for iou in ious:
+        tp, fp, fn = precision_at(t, iou)
+        tps += tp
+        fps += fp
+        fns += fn
+
+    p = tps / (tps + fps + fns)
+    prec.append(p)
+
+    if verbose:
+        print("{:1.3f}\t{}\t{}\t{}\t{:1.3f}".format(t, tps, fps, fns, p))
+
+    if verbose:
+        print("AP\t-\t-\t-\t{:1.3f}".format(np.mean(prec)))
+
+    return np.mean(prec)
 
 def epoch_train(model, optimizer, scheduler, dataloader, device, epoch):
     model.train() # set mode to train
@@ -437,7 +523,7 @@ def epoch_valid(model, dataloader, device, epoch):
     model.eval() # set mode to eval
     dataset_size = 0 #initialize
     running_loss = 0.0 #initialize
-    valid_score_history = [] #keep validation score
+    # valid_score_history = [] #keep validation score
     valid_ap_history = []
     pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='Validation',colour = 'red')
     for idx, (images, masks) in pbar:
@@ -449,31 +535,34 @@ def epoch_valid(model, dataloader, device, epoch):
         running_loss += (loss.item() * model_config.valid_batch_size) #update current running loss
         dataset_size += model_config.valid_batch_size #update current datasize
         epoch_loss = running_loss / dataset_size #divide epoch loss by current datasize
-
+        # print("y_pred before sigmoid is {}".format(y_pred))
         y_pred = nn.Sigmoid()(y_pred) #sigmoid for multi-class, smp loss function has sigmoid in it, but dice_coef doesn't.
         # print(torch.max(torch.squeeze(y_pred[0])))
         # print(torch.min(torch.squeeze(y_pred[0])))
         # print(torch.mean(torch.squeeze(y_pred[0])))
-        valid_dice = dice_coef(masks, y_pred).cpu().detach().numpy()
-        valid_ap = calculate_mean_average_precision(masks, y_pred)
-        valid_score_history.append(valid_dice)
+        # valid_dice = dice_coef(masks, y_pred).cpu().detach().numpy()
+        # print("y_pred after sigmoid is {}".format(y_pred))
+        # print("y_pred in validation before iou_map is {} and has shape {}".format(y_pred,y_pred.size()))
+        valid_ap = iou_map(masks.cpu().detach(), y_pred.cpu().detach(),verbose=0)
+        # valid_score_history.append(valid_dice)
         valid_ap_history.append(valid_ap)
 
         current_lr = optimizer.param_groups[0]['lr']
         pbar.set_postfix(valid_loss=f'{epoch_loss:0.3f}',
                         lr=f'{current_lr:0.4f}')
-    valid_score_history = np.mean(valid_score_history, axis=0)
+    # valid_score_history = np.mean(valid_score_history, axis=0)
     valid_ap_history = np.mean(valid_ap_history, axis=0)
     torch.cuda.empty_cache() #clear gpu memory after every epoch
     gc.collect()
-
-    return epoch_loss, valid_score_history, valid_ap_history #return loss and valid_score_history for this epoch
+    return epoch_loss, valid_ap_history
+    # return epoch_loss, valid_score_history, valid_ap_history #return loss and valid_score_history for this epoch
 #%%
 def run_training(model, optimizer, scheduler, device, num_epochs):
 
     start = time.time() # measure time
     best_model_wts = copy.deepcopy(model.state_dict()) #deepcopy
-    best_dice      = 0 # initial best score
+    best_ap = 0
+    # best_dice      = 0 # initial best score
     best_epoch     = -1 # initial best epoch
     history = defaultdict(list) # history defaultdict to store relevant variables
 
@@ -484,23 +573,27 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
         train_loss = epoch_train(model, optimizer, scheduler,
                                            dataloader=train_dataloader,
                                            device=model_config.device, epoch=epoch)
-        valid_loss, valid_score_history, valid_ap_history = epoch_valid(model, val_dataloader,
+        valid_loss, valid_ap_history = epoch_valid(model, val_dataloader,
                                                  device=model_config.device,
                                                  epoch=epoch)
-        valid_dice = valid_score_history
+        # valid_loss, valid_score_history, valid_ap_history = epoch_valid(model, val_dataloader,
+        #                                          device=model_config.device,
+        #                                          epoch=epoch)
+        # valid_dice = valid_score_history
         valid_ap = valid_ap_history
         history['Train Loss'].append(train_loss)
         history['Valid Loss'].append(valid_loss)
-        history['Valid Dice'].append(valid_dice)
+        # history['Valid Dice'].append(valid_dice)
         history['Valid AP'].append(valid_ap)
 
-        print(f'Valid Dice: {valid_dice:0.4f}')
+        # print(f'Valid Dice: {valid_dice:0.4f}')
         print(f'Valid AP: {valid_ap:0.4f}')
 
         # if dice score improves, save the best model
-        if valid_dice >= best_dice:
-            print(f"Valid Score Improved ({best_dice:0.4f} ---> {valid_dice:0.4f})")
-            best_dice    = valid_dice
+        # if valid_dice >= best_dice:
+        if valid_ap >= best_ap:
+            print(f"Valid Score Improved ({valid_ap:0.4f} ---> {best_ap:0.4f})")
+            best_ap    = valid_ap
             best_epoch   = epoch
             best_model_wts = copy.deepcopy(model.state_dict())
             PATH = os.path.join(model_config.model_save_directory,f"best_epoch-{fold:02d}.pt")
@@ -520,7 +613,7 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
     time_elapsed = end - start
     print('Training complete in {:.0f}h {:.0f}m'.format(
         time_elapsed // 3600, (time_elapsed % 3600) // 60))
-    print("Best Dice Score: {:.4f}".format(best_dice))
+    print("Best Dice Score: {:.4f}".format(best_ap))
 
     # load best model weights
     model.load_state_dict(best_model_wts)
