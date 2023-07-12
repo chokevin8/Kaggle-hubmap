@@ -1,0 +1,8 @@
+
+train: \\fatherserverdw\Kevin\hubmap\yolov8_v4\train_fold3\images
+val: \\fatherserverdw\Kevin\hubmap\yolov8_v4\val_fold3\images
+
+names:
+    0: blood_vessel
+
+nc: 1
