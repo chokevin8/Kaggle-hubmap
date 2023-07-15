@@ -116,7 +116,7 @@ class model_config:
     seed = 42
     train_batch_size = 8
     valid_batch_size = 16
-    epochs = 200  # ~15 minutes per epoch
+    epochs = 400  # ~15 minutes per epoch
     learning_rate = 0.0014 # 0.001 for bs=16
     scheduler = "CosineAnnealingLR"
     num_training_samples = 5499
@@ -128,7 +128,7 @@ class model_config:
     iters_to_accumulate = max(1, 32 // train_batch_size)  # for scaling accumulated gradients
     eta_min = 1e-5
     model_save_directory = os.path.join(os.getcwd(), "model",
-                                        "seresnext_attention_dropout_dilation_v2_retry")  #assuming os.getcwd is the current training script directory
+                                        "seresnext_attention_dropout_dilation_v3")  #assuming os.getcwd is the current training script directory
 
 # sets the seed of the entire notebook so results are the same every time we run for reproducibility. no randomness, everything is controlled.
 def set_seed(seed=42):
@@ -271,6 +271,11 @@ def visualize_images(dataset, num_images):
     for i, ax_row in enumerate(axes):
         index = indices[i]
         image, mask = dataset[index]
+        print("Image has dtype {}".format(image.dtype))
+        print(image)
+        print("Mask has dtype {}".format(mask.dtype))
+        print(np.unique(mask,return_counts=True))
+
 
         if dataset.transforms is None:
             ax_row[0].imshow(image)
@@ -300,9 +305,9 @@ if visualize:
 #%%
 # y_pred = np.zeros((512,512),dtype=np.uint8)
 # labels = np.ones((512,512),dtype=np.uint8)
-y_pred = np.random.rand(512, 512)
-labels = np.random.randint(2, size=(512, 512))
-#%%
+# y_pred = np.random.rand(512, 512)
+# labels = np.random.randint(2, size=(512, 512))
+# #%%
 def compute_iou(labels, y_pred):
     """
     Computes the IoU for instance labels and predictions.
@@ -445,7 +450,7 @@ def build_model():
     if pretrained_resnet:
         model = smp.UnetPlusPlus(encoder_name="resnet50", encoder_weights=model_config.key, activation='sigmoid',
                              encoder_depth = 5, decoder_channels = [512, 256, 128, 64, 32],in_channels=3, classes=1, decoder_attention_type = "scse", decoder_use_batchnorm=True, aux_params={"classes": 1, "pooling": "max","dropout": 0.5})
-    else:
+    else: #se_resnext101_32x4d
         model = smp.UnetPlusPlus(encoder_name="se_resnext50_32x4d", encoder_weights=None, encoder_depth = 5, decoder_channels = [512, 256, 128, 64, 32], activation='sigmoid',
                                  in_channels=3, classes=1, decoder_attention_type="scse", decoder_use_batchnorm=True,
                                  aux_params={"classes": 1, "pooling": "max", "dropout": 0.5})
@@ -455,9 +460,10 @@ def build_model():
 # dice_loss_func = smp.losses.DiceLoss(mode='binary')
 # bce_loss_func = smp.losses.SoftBCEWithLogitsLoss()
 iou_loss_func = smp.losses.JaccardLoss(mode='binary',from_logits = False)
-
+focal_loss_func = smp.losses.FocalLoss(mode='binary',alpha=0.25, gamma=2)
 def loss_func(y_pred, y_true):  #weighted avg of the two, maybe explore different weighting if possible?
-    return iou_loss_func(y_pred, y_true)
+    return 0.5 * focal_loss_func(y_pred,y_true) + 0.5 * iou_loss_func(y_pred,y_true)
+    # return iou_loss_func(y_pred, y_true)
     # return  model_config.dice_alpha* dice_loss_func(y_pred,y_true) + model_config.bce_alpha * bce_loss_func(y_pred,y_true)
 #%%
 def epoch_train(model, optimizer, scheduler, dataloader, device, epoch):
@@ -473,6 +479,13 @@ def epoch_train(model, optimizer, scheduler, dataloader, device, epoch):
 
         with autocast(enabled=True, dtype=torch.float16):  # enable autocast for forward pass
             y_pred, _ = model(images)  # run this if aux_params (dropout, maxpool, attention)
+            # print("mean of y_pred is {}".format(torch.mean(torch.squeeze(y_pred))))
+            # print("max of y_pred is {}".format(torch.max(torch.squeeze(y_pred))))
+            # print("min of y_pred is {}".format(torch.min(torch.squeeze(y_pred))))
+            # print("mean of masks is {}".format(torch.mean(torch.squeeze(masks))))
+            # sub_value = torch.mean(torch.squeeze(masks)) - torch.mean(torch.squeeze(y_pred))
+            # print("mean of masks minus mean of y_pred is {}".format(sub_value))
+
             # y_pred = model(images) # forward pass, get y_pred from input
             # print(y_pred[0].dtype)
             # print(masks[0].dtype)
@@ -500,7 +513,27 @@ def epoch_train(model, optimizer, scheduler, dataloader, device, epoch):
 
     return epoch_loss  #return loss for this epoch
 
+def visualize_images_validation(image,mask,y_pred,epoch):
 
+    fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15,15))
+    fig.tight_layout()
+
+    image = image.cpu().numpy()
+    axes[0].imshow(image.transpose(1,2,0).astype(np.uint8))
+    axes[0].set_title("H&E Validation Image for epoch {}".format(epoch))
+    axes[0].axis("off")
+
+    mask = mask.cpu().numpy()
+    axes[1].imshow(mask.squeeze(0),cmap="gray")
+    axes[1].set_title("Ground Truth Validation Mask for epoch {}")
+    axes[1].axis("off")
+
+    y_pred = y_pred.cpu().numpy()
+    axes[2].imshow(y_pred.squeeze(0),cmap="gray")
+    axes[2].set_title("Model Predicted Validation Mask for epoch {}".format(epoch))
+    axes[2].axis("off")
+
+    plt.show()
 @torch.no_grad()  # disable gradient calc for validation
 def epoch_valid(model, dataloader, device, epoch):
     model.eval()  # set mode to eval
@@ -512,6 +545,17 @@ def epoch_valid(model, dataloader, device, epoch):
         images = images.to(device, dtype=torch.float)
         masks = masks.to(device, dtype=torch.float)
         y_pred, _ = model(images)  # run this if aux_params (dropout, maxpool, attention)
+        # print("mean of y_pred is {}".format(torch.mean(torch.squeeze(y_pred))))
+        # print("max of y_pred is {}".format(torch.max(torch.squeeze(y_pred))))
+        # print("min of y_pred is {}".format(torch.min(torch.squeeze(y_pred))))
+        # print("mean of masks is {}".format(torch.mean(torch.squeeze(masks))))
+        # sub_value = torch.mean(torch.squeeze(masks)) - torch.mean(torch.squeeze(y_pred))
+        # print("mean of masks minus mean of y_pred is {}".format(sub_value))
+        if idx == 0 or idx == 2 or idx == 4 or idx == 6 or idx == 8: #visualize random images to make sure training is going at least okay
+            image = images[0]
+            mask = masks[0]
+            y_pred_ind = y_pred[0]
+            visualize_images_validation(image,mask,y_pred_ind,epoch)
         # y_pred = model(images)
         loss = loss_func(y_pred, masks)
         running_loss += (loss.item() * model_config.valid_batch_size)  #update current running loss
@@ -597,9 +641,10 @@ optimizer = optim.Adam(model.parameters(),
 if model_config == "CosineAnnealingLR":  # change to CosineAnnealingLR
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=model_config.T_max,
                                                eta_min=model_config.eta_min)
-print(model)
+# print(model)
 #%%
 # Run Training!
+
 train_dataloader, valid_dataloader = load_dataset()
 model = build_model()
 optimizer = optim.Adam(model.parameters(),
