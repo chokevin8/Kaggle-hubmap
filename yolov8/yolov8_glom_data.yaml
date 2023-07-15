@@ -1,0 +1,8 @@
+
+train: \\fatherserverdw\Kevin\hubmap\yolov8\train_fold1\images
+val: \\fatherserverdw\Kevin\hubmap\yolov8_glom\val_fold1\images
+
+names:
+    0: glomerulus
+
+nc: 1
