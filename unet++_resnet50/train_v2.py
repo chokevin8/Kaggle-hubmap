@@ -24,6 +24,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.optim import lr_scheduler
 import cv2
 import matplotlib
+from torch.nn import Identity
 
 matplotlib.style.use('ggplot')
 import albumentations as A
@@ -113,7 +114,7 @@ class model_config:
     current_fold = 0
     key = "BT" #"MoCoV2"
     pretrained_resnet = False
-    seed = 42
+    seed = 35 #42
     train_batch_size = 8
     valid_batch_size = 16
     epochs = 400  # ~15 minutes per epoch
@@ -128,10 +129,10 @@ class model_config:
     iters_to_accumulate = max(1, 32 // train_batch_size)  # for scaling accumulated gradients
     eta_min = 1e-5
     model_save_directory = os.path.join(os.getcwd(), "model",
-                                        "seresnext_attention_dropout_dilation_v3")  #assuming os.getcwd is the current training script directory
+                                        "effunet-dice-bce")  #assuming os.getcwd is the current training script directory
 
 # sets the seed of the entire notebook so results are the same every time we run for reproducibility. no randomness, everything is controlled.
-def set_seed(seed=42):
+def set_seed(seed=35):
     np.random.seed(seed)  #numpy specific random
     random.seed(seed)  # python specific random (also for albumentation augmentations)
     torch.manual_seed(seed)  # torch specific random
@@ -156,8 +157,8 @@ new_df_val
 #                                        # p changed from previous randstainna methods
 #                                        transforms.RandomGrayscale(p=0.2),  # p changed from previous randstainna methods
 #                                        RandStainNA(  # p changed from previous randstainna methods
-#                                            yaml_file="randstainna_all.yaml",
-#                                            std_hyper=-0.3,
+#                                            yaml_file="randstainna_LAB.yaml",
+#                                            std_hyper=0,
 #                                            probability=0.8,
 #                                            distribution="normal",
 #                                            is_train=True
@@ -165,7 +166,7 @@ new_df_val
 #                                        ])
 # val_transforms = transforms.Compose([RandStainNA(  # p changed from previous randstainna methods
 #     yaml_file="randstainna_all.yaml",
-#     std_hyper=-0.3,
+#     std_hyper=0,
 #     probability=0.8,
 #     distribution="normal",
 #     is_train=True
@@ -262,7 +263,7 @@ print("Images have a tensor size of {}, and Labels have a tensor size of {}".
       format(images.size(), labels.size()))
 #%%
 def visualize_images(dataset, num_images):
-    random.seed(42)
+    random.seed(35)
     indices = random.sample(range(len(dataset)), num_images)
 
     fig, axes = plt.subplots(nrows=num_images, ncols=2, figsize=(10, 12))
@@ -280,15 +281,16 @@ def visualize_images(dataset, num_images):
         if dataset.transforms is None:
             ax_row[0].imshow(image)
         else:
-            ax_row[0].imshow(image.permute(1,2,0)) #
-
+            ax_row[0].imshow(image.permute(1,2,0))
+        # ax_row[0].imshow(image.permute(1, 2, 0))  # for torchvision randstain
         ax_row[0].set_title("Image")
         ax_row[0].axis("off")
 
         if dataset.transforms is None:
             ax_row[1].imshow(mask, cmap="gray")
         else:
-            ax_row[1].imshow(mask.squeeze(0),cmap="gray")
+            ax_row[1].imshow(mask.squeeze(0), cmap="gray")
+        # ax_row[1].imshow(mask.squeeze(0),cmap="gray") # for torchvision randstain
         ax_row[1].set_title("Mask")
         ax_row[1].axis("off")
 
@@ -321,7 +323,7 @@ def compute_iou(labels, y_pred):
     """
 
     true_objects = len(np.unique(labels))
-    y_pred = y_pred > 0.5 #change this threshold maybe
+    y_pred = y_pred > 0.1 #change this threshold maybe
     y_pred = y_pred * 1
     pred_objects = len(np.unique(y_pred))
 
@@ -451,18 +453,23 @@ def build_model():
         model = smp.UnetPlusPlus(encoder_name="resnet50", encoder_weights=model_config.key, activation='sigmoid',
                              encoder_depth = 5, decoder_channels = [512, 256, 128, 64, 32],in_channels=3, classes=1, decoder_attention_type = "scse", decoder_use_batchnorm=True, aux_params={"classes": 1, "pooling": "max","dropout": 0.5})
     else: #se_resnext101_32x4d
-        model = smp.UnetPlusPlus(encoder_name="se_resnext50_32x4d", encoder_weights=None, encoder_depth = 5, decoder_channels = [512, 256, 128, 64, 32], activation='sigmoid',
+        model = smp.UnetPlusPlus(encoder_name="tu-efficientnetv2_rw_m", encoder_weights=None, encoder_depth = 5, decoder_channels = [512, 256, 128, 64, 32], activation='sigmoid',
                                  in_channels=3, classes=1, decoder_attention_type="scse", decoder_use_batchnorm=True,
-                                 aux_params={"classes": 1, "pooling": "max", "dropout": 0.5})
+                                 aux_params={"classes": 1, "pooling": "max", "dropout": 0.5}) #tu-efficientnetv2_rw_m
     model.to(model_config.device)  # model to gpu
     return model
 
-# dice_loss_func = smp.losses.DiceLoss(mode='binary')
-# bce_loss_func = smp.losses.SoftBCEWithLogitsLoss()
-iou_loss_func = smp.losses.JaccardLoss(mode='binary',from_logits = False)
-focal_loss_func = smp.losses.FocalLoss(mode='binary',alpha=0.25, gamma=2)
+dice_loss_func = smp.losses.DiceLoss(mode='binary', from_logits= True)
+bce_loss_func = smp.losses.SoftBCEWithLogitsLoss(pos_weight=torch.tensor([20],dtype=torch.int64).to(model_config.device))
+# both loss funcs from logits
+# iou_loss_func = smp.losses.JaccardLoss(mode='binary',from_logits = True)
+# focal_loss_func = smp.losses.FocalLoss(mode='binary',alpha=0.95, gamma=2)
+# tversky_loss_func = smp.losses.TverskyLoss(mode='binary',from_logits=True,alpha=0.3,beta=0.7,gamma=1.33)
 def loss_func(y_pred, y_true):  #weighted avg of the two, maybe explore different weighting if possible?
-    return 0.5 * focal_loss_func(y_pred,y_true) + 0.5 * iou_loss_func(y_pred,y_true)
+    # return dice_loss_func(y_pred,y_true)
+    return 0.5 * dice_loss_func(y_pred,y_true) + 0.5 * bce_loss_func(y_pred,y_true)
+    # return tversky_loss_func(y_pred, y_true)
+    # return 0.2 * focal_loss_func(y_pred,y_true) + 0.5 * dice_loss_func(y_pred,y_true) + 0.2 * iou_loss_func(y_pred,y_true)
     # return iou_loss_func(y_pred, y_true)
     # return  model_config.dice_alpha* dice_loss_func(y_pred,y_true) + model_config.bce_alpha * bce_loss_func(y_pred,y_true)
 #%%
@@ -485,7 +492,6 @@ def epoch_train(model, optimizer, scheduler, dataloader, device, epoch):
             # print("mean of masks is {}".format(torch.mean(torch.squeeze(masks))))
             # sub_value = torch.mean(torch.squeeze(masks)) - torch.mean(torch.squeeze(y_pred))
             # print("mean of masks minus mean of y_pred is {}".format(sub_value))
-
             # y_pred = model(images) # forward pass, get y_pred from input
             # print(y_pred[0].dtype)
             # print(masks[0].dtype)
@@ -551,12 +557,12 @@ def epoch_valid(model, dataloader, device, epoch):
         # print("mean of masks is {}".format(torch.mean(torch.squeeze(masks))))
         # sub_value = torch.mean(torch.squeeze(masks)) - torch.mean(torch.squeeze(y_pred))
         # print("mean of masks minus mean of y_pred is {}".format(sub_value))
-        if idx == 0 or idx == 2 or idx == 4 or idx == 6 or idx == 8: #visualize random images to make sure training is going at least okay
+        if (idx == 0 or idx == 2 or idx == 4) and epoch % 5 == 0: #visualize random images to make sure training is going at least okay
             image = images[0]
             mask = masks[0]
-            y_pred_ind = y_pred[0]
+            y_pred_prob = nn.Sigmoid()(y_pred)
+            y_pred_ind = y_pred_prob[0] #1st image of batch
             visualize_images_validation(image,mask,y_pred_ind,epoch)
-        # y_pred = model(images)
         loss = loss_func(y_pred, masks)
         running_loss += (loss.item() * model_config.valid_batch_size)  #update current running loss
         dataset_size += model_config.valid_batch_size  #update current datasize
@@ -568,7 +574,8 @@ def epoch_valid(model, dataloader, device, epoch):
         # print(torch.min(torch.squeeze(y_pred[0])))
         # print(torch.mean(torch.squeeze(y_pred[0])))
         masks = masks.squeeze(0)
-        valid_ap = iou_map(masks.cpu().numpy(), y_pred.cpu().numpy(), verbose=0)
+        y_pred_prob = nn.Sigmoid()(y_pred)
+        valid_ap = iou_map(masks.cpu().numpy(), y_pred_prob.cpu().numpy(), verbose=0)
         valid_ap_history.append(valid_ap)
         current_lr = optimizer.param_groups[0]['lr']
         pbar.set_postfix(valid_loss=f'{epoch_loss:0.3f}',
@@ -615,7 +622,8 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
                 os.makedirs(model_config.model_save_directory)
             torch.save(model.state_dict(), PATH)  #current directory (on kaggle)
             print("Model Saved!")
-
+        print(f'Best AP so far: {best_ap:0.4f}')
+        print(f'Best AP at epoch #: {best_epoch:d}')
         # save the most recent model
         last_model_wts = copy.deepcopy(model.state_dict())
         PATH = os.path.join(model_config.model_save_directory, f"latest_epoch-{model_config.current_fold:02d}.pt")
@@ -647,6 +655,8 @@ if model_config == "CosineAnnealingLR":  # change to CosineAnnealingLR
 
 train_dataloader, valid_dataloader = load_dataset()
 model = build_model()
+model.segmentation_head[2] = Identity()
+print(model)
 optimizer = optim.Adam(model.parameters(),
                        lr=model_config.learning_rate,
                        weight_decay=model_config.weight_decay)  # default learning rate
