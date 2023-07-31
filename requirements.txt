@@ -22,6 +22,8 @@ segmentation-models-pytorch
 imagecodecs
 pycocotools
 pyvips
-"ray[tune]"
+# "ray[tune]"
 scikit-learn
 albumentations
+transformers
+evaluate
