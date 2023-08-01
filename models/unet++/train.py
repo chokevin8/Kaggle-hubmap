@@ -1,5 +1,6 @@
-#%%
-# first import all of the packages required in this entire project:
+#full training code for UNet architecture with different types of encoders that you can try using the segmentation-models-pytorch module.
+
+#first import all of the packages required in this entire project:
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -13,7 +14,6 @@ from glob import glob
 import copy
 import joblib
 from tqdm import tqdm
-
 tqdm.pandas()
 import gc
 from collections import defaultdict
@@ -25,12 +25,10 @@ from torch.optim import lr_scheduler
 import cv2
 import matplotlib
 from torch.nn import Identity
-
 matplotlib.style.use('ggplot')
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from sklearn.model_selection import StratifiedKFold
-
 Image.MAX_IMAGE_PIXELS = None
 pd.set_option('display.float_format', '{:.2f}'.format)
 import segmentation_models_pytorch as smp
@@ -39,12 +37,11 @@ from torchvision import transforms
 from randstainna import RandStainNA
 import pickle
 import torchvision.transforms.functional as F
-#%%
-# load train_df for blood_vessel
+
+
+#load train_df for blood_vessel
 train_df = pd.read_excel(r"\\fatherserverdw\Kevin\hubmap\unet++\bv_train_df.xlsx")
-# train_df.drop('Unnamed: 0',inplace=True)
-train_df
-find_mean_std_dataset = False  # already found it, so False. Turn to true if you want to find std of mean of another dataset.
+find_mean_std_dataset = False  #already found it, so False. Turn to true if you want to find std of mean for the first time.
 
 if find_mean_std_dataset:
     class HubmapDataset(Dataset):
@@ -52,10 +49,8 @@ if find_mean_std_dataset:
             self.df = df
             self.directory = df["image_path"].tolist()
             self.transform = transform
-
         def __len__(self):
             return int(len(self.directory))
-
         def __getitem__(self, idx):
             path = self.directory[idx]
             image = cv2.imread(path, cv2.COLOR_BGR2RGB)
@@ -63,143 +58,117 @@ if find_mean_std_dataset:
                 image = self.transform(image=image)['image']
             return image
 
-
     device = torch.device('cpu')
     num_workers = 0
-    image_size = 384
+    image_size = 512
     batch_size = 4
-
     augmentations = A.Compose([A.Resize(height=image_size, width=image_size),
                                A.Normalize(mean=(0, 0, 0), std=(1, 1, 1)),
                                ToTensorV2()])
-
     unstain2stain_dataset = HubmapDataset(df=train_df, transform=augmentations)  # data loader
     image_loader = DataLoader(unstain2stain_dataset,
                               batch_size=batch_size,
                               shuffle=False,
                               num_workers=num_workers,
                               pin_memory=True)
-
     images = next(iter(image_loader))
     print("Images have a tensor size of {}.".
           format(images.size()))
-
-    # placeholders
     psum = torch.tensor([0.0, 0.0, 0.0])
     psum_sq = torch.tensor([0.0, 0.0, 0.0])
-
-    # loop through images
+    #loop through images
     for inputs in tqdm(image_loader, colour='red'):
         psum += inputs.sum(axis=[0, 2, 3])  # sum over axis 1
         psum_sq += (inputs ** 2).sum(axis=[0, 2, 3])  # sum over axis 1
-
-    # pixel count
+    #pixel count
     count = len(train_df) * image_size * image_size
-
-    # mean and std
+    #mean and std
     total_mean = psum / count
     total_var = (psum_sq / count) - (total_mean ** 2)
     total_std = torch.sqrt(total_var)
-
-    # output
+    #final result
     print('mean: ' + str(total_mean))
     print('std:  ' + str(total_std))
-
-
 # results:
 # mean: tensor([0.6801, 0.4165, 0.6313])
 # std:  tensor([0.1308, 0.2094, 0.1504])
-#%%
+
+#all model hyperparameters are stored here:
 class model_config:
-    current_fold = 0
-    key = "BT" #"MoCoV2"
-    pretrained_resnet = False
-    seed = 35 #42
+    current_fold = 0 #number of CV fold to train
+    key = "BT" #key of resnet model to train if pretrained_resnet = True
+    pretrained_resnet = False #whether to train using a pretrained resnet model
+    use_randstainNA = True #whether to use randstainNA for image augmentation & normalization
+    seed = 42 #random seed
     train_batch_size = 8
     valid_batch_size = 16
-    epochs = 400  # ~15 minutes per epoch
+    epochs = 100
     learning_rate = 0.0014 # 0.001 for bs=16
-    scheduler = "CosineAnnealingLR"
+    scheduler = "CosineAnnealingLR" #explore different lr schedulers
     num_training_samples = 5499
-    T_max = int(
-        num_training_samples / train_batch_size * epochs)  # number of iterations for a full cycle, need to change for different # of iterations. (iteration = batch size)
-    weight_decay = 1e-6  # explore different weight decay (Adam optimizer)
-    n_accumulate = 1
+    T_max = int(num_training_samples / train_batch_size * epochs)  #number of iterations for a full cycle, need to change for different # of iterations (iteration = batch size).
+    weight_decay = 1e-6  #explore different weight decay (for Adam optimizer)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    iters_to_accumulate = max(1, 32 // train_batch_size)  # for scaling accumulated gradients
+    iters_to_accumulate = max(1, 32 // train_batch_size)  #for scaling accumulated gradients
     eta_min = 1e-5
-    model_save_directory = os.path.join(os.getcwd(), "model",
-                                        "effunet-dice-bce")  #assuming os.getcwd is the current training script directory
+    model_save_directory = os.path.join(os.getcwd(), "model", "UNet_baseline")  #assuming os.getcwd is the current training script directory
 
-# sets the seed of the entire notebook so results are the same every time we run for reproducibility. no randomness, everything is controlled.
-def set_seed(seed=35):
+#sets the seed of the entire notebook so results are the same every time we run for reproducibility
+def set_seed(seed=42):
     np.random.seed(seed)  #numpy specific random
-    random.seed(seed)  # python specific random (also for albumentation augmentations)
-    torch.manual_seed(seed)  # torch specific random
-    torch.cuda.manual_seed(seed)  # cuda specific random
-    # when running on the CuDNN backend, two further options must be set
+    random.seed(seed)  #python specific random (also for albumentation augmentations)
+    torch.manual_seed(seed)  #torch specific random
+    torch.cuda.manual_seed(seed)  #cuda specific random
+    #when running on the CuDNN backend, two further options must be set
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False  # when deterministic = true, benchmark = False, otherwise might not be deterministic
-    os.environ['PYTHONHASHSEED'] = str(seed)  # set a fixed value for the hash seed, for hases like dictionary
+    torch.backends.cudnn.benchmark = False  #when deterministic = true, benchmark = False, otherwise might not be deterministic
+    os.environ['PYTHONHASHSEED'] = str(seed)  #set a fixed value for the hash seed, for hashes like dictionary
 
-set_seed(model_config.seed)
-#%%
-# for each fold
+set_seed(model_config.seed) # set seed first
+
+#get train and validation dataframe containing image and mask paths to use for each fold (dataframe processed elsewhere using StratifiedKFold with 5-fold CV)
 new_df_train = pd.read_excel(r"\\fatherserverdw\Kevin\hubmap\unet++_v2\train_fold{}.xlsx".format(model_config.current_fold))
-new_df_train
-#%%
 new_df_val = pd.read_excel(r"\\fatherserverdw\Kevin\hubmap\unet++_v2\val_fold{}.xlsx".format(model_config.current_fold))
-new_df_val
-#%%
-# randstain pipeline, test if empty val_trnasforms is better or including just randstain is better
-# train_transforms = transforms.Compose([transforms.ToPILImage(),
-#                                        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-#                                        # p changed from previous randstainna methods
-#                                        transforms.RandomGrayscale(p=0.2),  # p changed from previous randstainna methods
-#                                        RandStainNA(  # p changed from previous randstainna methods
-#                                            yaml_file="randstainna_LAB.yaml",
-#                                            std_hyper=0,
-#                                            probability=0.8,
-#                                            distribution="normal",
-#                                            is_train=True
-#                                        )
-#                                        ])
-# val_transforms = transforms.Compose([RandStainNA(  # p changed from previous randstainna methods
-#     yaml_file="randstainna_all.yaml",
-#     std_hyper=0,
-#     probability=0.8,
-#     distribution="normal",
-#     is_train=True
-# )])
 
-# no randstain pipeline:
-train_transforms = A.Compose([
-    A.ColorJitter(brightness = 0.2, contrast = 0.2, saturation = 0.2, hue = 0.1, p = 0.8),
-    A.GaussNoise(p=0.2),
-    A.ToGray(p=0.2),
-    A.HorizontalFlip(p=0.5),
-    A.VerticalFlip(p=0.5),
-    # A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)),
-    ToTensorV2() #V2 converts tensor to CHW automatically
-])
-val_transforms = A.Compose([
-    # A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)),
-                            ToTensorV2()])
-#%%
+#different transform pipelines since randstainNA uses torchvision transforms while I personally enjoy using albumentations:
+if model_config.use_randstainNA:
+    train_transforms = transforms.Compose([transforms.ToPILImage(),
+                                           transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+                                           transforms.RandomGrayscale(p=0.2),
+                                           RandStainNA(
+                                               yaml_file="randstainna_LAB.yaml",
+                                               std_hyper=0,
+                                               probability=0.8,
+                                               distribution="normal",
+                                               is_train=True
+                                           )
+                                           ])
+    val_transforms = None
+else:
+    #no randstain, albumentations pipeline:
+    train_transforms = A.Compose([
+        A.ColorJitter(brightness = 0.2, contrast = 0.2, saturation = 0.2, hue = 0.1, p = 0.8),
+        A.GaussNoise(p=0.2),
+        A.ToGray(p=0.2),
+        A.HorizontalFlip(p=0.5),
+        A.VerticalFlip(p=0.5),
+        A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)),
+        ToTensorV2() #V2 converts tensor to CHW automatically
+    ])
+    val_transforms = A.Compose([ToTensorV2()])
+
 class TrainDataSet(Dataset):
-    # initialize df, label, imagepath and transforms
+    #initialize df, label, imagepath, transforms:
     def __init__(self, df, transforms=None, label=True):
         self.df = df
         self.label = label
         self.imagepaths = df["image_path"].tolist()
         self.maskpaths = df["mask_path"].tolist()
         self.transforms = transforms
-
-    # define length, which is simply length of all imagepaths
     def __len__(self):
         return len(self.df)
 
-    # define main function to read image and label, apply transform function and return the transformed images.
+    #define main function to read image and label, apply transform function and return the transformed images.
     def __getitem__(self, idx):
         image_path = self.imagepaths[idx]
         image = cv2.imread(image_path, cv2.COLOR_BGR2RGB)
@@ -209,35 +178,36 @@ class TrainDataSet(Dataset):
             mask = cv2.imread(mask_path, 0)
             mask = np.array(mask)
         if self.transforms is not None:  #albumentations vs torchvision difference:
-            # torchvision (randstain):
-            # image = self.transforms(image)
-            # #apply horizontal and vertical flips to image and mask
-            # if np.random.rand() < 0.5:
-            #     image = np.flipud(image)  #vertical
-            #     mask = np.flipud(mask)
-            # if np.random.rand() < 0.5:
-            #     image = np.fliplr(image)  #horizontal
-            #     mask = np.fliplr(mask)
-            # # Convert image and mask to tensors
-            # image = np.ascontiguousarray(image)
-            # image = np.transpose(image, (2, 0, 1))
-            # mask = np.ascontiguousarray(mask)
-            # image = torch.from_numpy(image.copy())  #.float()
-            # mask = torch.from_numpy(mask.copy()).unsqueeze(0)  #.to(torch.uint8)
-            #albumentation (no randstain):
-            transformed = self.transforms(image=image,mask=mask)
-            image = transformed['image']
-            mask = transformed['mask']
-            mask = mask.unsqueeze(0)
-            # image = torch.float 32, mask = torch.uint8
-        # if self.transforms is None: # only for torchvision (randstain), for validation if no val_transforms
-        #     image = np.transpose(image, (2, 0, 1))
-        #     image = torch.from_numpy(image)
-        #     mask = torch.from_numpy(mask).unsqueeze(0)
-        return image, mask  # return tensors of image arrays, image should be 3x 512 x 512, mask 1 x 512 x 512 (need dummy dimension to match dimension)
+            if model_config.use_randstainNA:
+                image = self.transforms(image)
+                #apply horizontal and vertical flips to image and mask manually since torchvision transforms may not
+                #guarantee flips concurrently (can result in image-mask mismatch when one is flipped but other is not)
+                if np.random.rand() < 0.5:
+                    image = np.flipud(image)  #vertical flip
+                    mask = np.flipud(mask)
+                if np.random.rand() < 0.5:
+                    image = np.fliplr(image)  #horizontal flip
+                    mask = np.fliplr(mask)
+                #convert image and mask to tensors
+                image = np.ascontiguousarray(image)
+                image = np.transpose(image, (2, 0, 1))
+                mask = np.ascontiguousarray(mask)
+                image = torch.from_numpy(image.copy())
+                mask = torch.from_numpy(mask.copy()).unsqueeze(0) #dtypes: image = torch.float 32, mask = torch.uint8
+            else:
+                transformed = self.transforms(image=image,mask=mask)
+                image = transformed['image']
+                mask = transformed['mask']
+                mask = mask.unsqueeze(0) #dtypes: image = torch.float 32, mask = torch.uint8
 
+        if self.transforms is None and not model_config.randstainNA: # val_transforms = None for randstainNA pipeline
+            image = np.transpose(image, (2, 0, 1)) #HWC to CHW conversion
+            image = torch.from_numpy(image)
+            mask = torch.from_numpy(mask).unsqueeze(0) #dtypes: image = torch.float 32, mask = torch.uint8
+        return image, mask  # return tensors of equal dtype and size
+        #image is size 3x512x512 and mask is size 1x512x512 (need dummy dimension to match dimension)
 
-# define dataloading function:
+#define dataloading function:
 def load_dataset():
     model_df_train = new_df_train.reset_index(drop=True)
     model_df_val = new_df_val.reset_index(drop=True)
@@ -304,12 +274,7 @@ if visualize:
     #%%
     train_dataset = TrainDataSet(df=new_df_train, transforms=train_transforms)
     visualize_images(train_dataset, num_images=5)
-#%%
-# y_pred = np.zeros((512,512),dtype=np.uint8)
-# labels = np.ones((512,512),dtype=np.uint8)
-# y_pred = np.random.rand(512, 512)
-# labels = np.random.randint(2, size=(512, 512))
-# #%%
+
 def compute_iou(labels, y_pred):
     """
     Computes the IoU for instance labels and predictions.
