@@ -1,4 +1,5 @@
-#full training code for UNet architecture with different types of encoders that you can try using the segmentation-models-pytorch module.
+#Full training code for UNet architecture with different types of encoders that you can try using the segmentation-models-pytorch module. Each function and important
+#lines of code will have comments in them.
 
 #first import all of the packages required in this entire project:
 import numpy as np
@@ -109,7 +110,7 @@ class model_config:
     T_max = int(num_training_samples / train_batch_size * epochs)  #number of iterations for a full cycle, need to change for different # of iterations (iteration = batch size).
     weight_decay = 1e-6  #explore different weight decay (for Adam optimizer)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    iters_to_accumulate = max(1, 32 // train_batch_size)  #for scaling accumulated gradients
+    iters_to_accumulate = max(1, 32 // train_batch_size)  #for scaling accumulated gradients, should never be <1
     eta_min = 1e-5
     model_save_directory = os.path.join(os.getcwd(), "model", "UNet_baseline")  #assuming os.getcwd is the current training script directory
 
@@ -200,30 +201,29 @@ class TrainDataSet(Dataset):
                 mask = transformed['mask']
                 mask = mask.unsqueeze(0) #dtypes: image = torch.float 32, mask = torch.uint8
 
-        if self.transforms is None and not model_config.randstainNA: # val_transforms = None for randstainNA pipeline
+        if self.transforms is None and not model_config.randstainNA: #since val_transforms = None for randstainNA pipeline
             image = np.transpose(image, (2, 0, 1)) #HWC to CHW conversion
             image = torch.from_numpy(image)
             mask = torch.from_numpy(mask).unsqueeze(0) #dtypes: image = torch.float 32, mask = torch.uint8
-        return image, mask  # return tensors of equal dtype and size
+        return image, mask  #return tensors of equal dtype and size
         #image is size 3x512x512 and mask is size 1x512x512 (need dummy dimension to match dimension)
 
-#define dataloading function:
+#define dataloading function to use above dataset to return train and val dataloaders:
 def load_dataset():
     model_df_train = new_df_train.reset_index(drop=True)
     model_df_val = new_df_val.reset_index(drop=True)
-    train_dataset = TrainDataSet(df=model_df_train, transforms=train_transforms)  # image,mask pair
-    # val_dataset = TrainDataSet(df=model_df_val, transforms=None) #no transforms for validation for randstain (torchvisions)
-    val_dataset = TrainDataSet(df=model_df_val,
-                               transforms=val_transforms)  #yes transforms for validation for not randstain (albumentations)
+    train_dataset = TrainDataSet(df=model_df_train, transforms=train_transforms)
+    val_dataset = TrainDataSet(df=model_df_val, transforms=val_transforms)
     train_dataloader = DataLoader(dataset=train_dataset,
                                   batch_size=model_config.train_batch_size,
-                                  # pin_memory= true allows faster data transport from cpu to gpu
+                                  #pin_memory= true allows faster data transport from cpu to gpu
                                   num_workers=0, pin_memory=True, shuffle=False)
     val_dataloader = DataLoader(dataset=val_dataset,
                                 batch_size=model_config.valid_batch_size,
                                 num_workers=0, pin_memory=True, shuffle=False)
-    return train_dataloader, val_dataloader
-#%%
+    return train_dataloader, val_dataloader #return train and val dataloaders
+
+#test to see if dataloaders return desired batch size and visualize images to see if images are indeed transformed:
 train_dataloader, val_dataloader = load_dataset()
 images, labels = next(iter(train_dataloader))
 print("Images have a tensor size of {}, and Labels have a tensor size of {}".
@@ -231,92 +231,70 @@ print("Images have a tensor size of {}, and Labels have a tensor size of {}".
 images, labels = next(iter(val_dataloader))
 print("Images have a tensor size of {}, and Labels have a tensor size of {}".
       format(images.size(), labels.size()))
-#%%
 def visualize_images(dataset, num_images):
-    random.seed(35)
     indices = random.sample(range(len(dataset)), num_images)
-
     fig, axes = plt.subplots(nrows=num_images, ncols=2, figsize=(10, 12))
     fig.tight_layout()
-
     for i, ax_row in enumerate(axes):
         index = indices[i]
         image, mask = dataset[index]
-        print("Image has dtype {}".format(image.dtype))
-        print(image)
-        print("Mask has dtype {}".format(mask.dtype))
-        print(np.unique(mask,return_counts=True))
-
-
-        if dataset.transforms is None:
+        if dataset.transforms is None and not model_config.use_randstainNA:
             ax_row[0].imshow(image)
         else:
             ax_row[0].imshow(image.permute(1,2,0))
-        # ax_row[0].imshow(image.permute(1, 2, 0))  # for torchvision randstain
         ax_row[0].set_title("Image")
         ax_row[0].axis("off")
 
-        if dataset.transforms is None:
+        if dataset.transforms is None and not model_config.use_randstainNA:
             ax_row[1].imshow(mask, cmap="gray")
         else:
             ax_row[1].imshow(mask.squeeze(0), cmap="gray")
-        # ax_row[1].imshow(mask.squeeze(0),cmap="gray") # for torchvision randstain
         ax_row[1].set_title("Mask")
         ax_row[1].axis("off")
-
     plt.show()
 
-
-visualize = True # check before training
+visualize = True #always check if transforms properly applied before training
 if visualize:
     original_dataset = TrainDataSet(df=new_df_train, transforms=None)
     visualize_images(original_dataset, num_images=5)
-    #%%
     train_dataset = TrainDataSet(df=new_df_train, transforms=train_transforms)
     visualize_images(train_dataset, num_images=5)
 
+#below three functions compute_iou, precision_at, and iou_map are functions to calculate average precision @IOU = 0.6 (the competition metric)
+#credits to: https://www.kaggle.com/code/theoviel/competition-metric-map-iou
 def compute_iou(labels, y_pred):
     """
     Computes the IoU for instance labels and predictions.
-
     Args:
         labels (np array): Labels.
         y_pred (np array): predictions
-
     Returns:
         np array: IoU matrix, of size true_objects x pred_objects.
     """
-
     true_objects = len(np.unique(labels))
     y_pred = y_pred > 0.1 #change this threshold maybe
     y_pred = y_pred * 1
     pred_objects = len(np.unique(y_pred))
-
-    # Compute intersection between all objects
+    #compute intersection between all objects
     intersection = np.histogram2d(
         labels.flatten(), y_pred.flatten(), bins=(true_objects, pred_objects)
     )[0]
-
-    # Compute areas (needed for finding the union between all objects)
+    #compute areas (needed for finding the union between all objects)
     area_true = np.histogram(labels, bins=true_objects)[0]
     area_pred = np.histogram(y_pred, bins=pred_objects)[0]
     area_true = np.expand_dims(area_true, -1)
     area_pred = np.expand_dims(area_pred, 0)
-
-    # Compute union
+    #compute union
     union = area_true + area_pred - intersection
     iou = intersection / union
-    return iou[1:,1:]
-    # return iou[1:, 1:]  # exclude background
+    return iou[1:,1:] #exclude background
 
 def precision_at(threshold, iou):
     """
     Computes the precision at a given threshold.
-
     Args:
         threshold (float): Threshold.
         iou (np array [n_truths x n_preds]): IoU matrix.
-
     Returns:
         int: Number of true positives,
         int: Number of false positives,
@@ -332,51 +310,43 @@ def precision_at(threshold, iou):
         np.sum(false_negatives),
     )
     return tp, fp, fn
-
 def iou_map(truths, preds, verbose=0):
     """
     Computes the metric for the competition.
     Masks contain the segmented pixels where each object has one value associated,
     and 0 is the background.
-
     Args:
         truths (list of masks): Ground truths.
         preds (list of masks): Predictions.
         verbose (int, optional): Whether to print infos. Defaults to 0.
-
     Returns:
         float: mAP.
     """
     ious = [compute_iou(truth, pred) for truth, pred in zip(truths, preds)]
-
     if verbose:
         print("Thresh\tTP\tFP\tFN\tPrec.")
-
     prec = []
-    t = 0.6 # competition iou threshold = 0.6
+    t = 0.6 #competition iou threshold = 0.6
     tps, fps, fns = 0, 0, 0
     for iou in ious:
         tp, fp, fn = precision_at(t, iou)
         tps += tp
         fps += fp
         fns += fn
-
     p = tps / (tps + fps + fns)
     prec.append(p)
-
     if verbose:
         print("{:1.3f}\t{}\t{}\t{}\t{:1.3f}".format(t, tps, fps, fns, p))
-
     if verbose:
         print("AP\t-\t-\t-\t{:1.3f}".format(np.mean(prec)))
-
     return np.mean(prec)
 
+#below is code to fetch pretrained resnet50 weights if that pretrained_resnet = True:
+#code and model credits to: https://github.com/lunit-io/benchmark-ssl-pathology
 class ResNetTrunk(ResNet):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         del self.fc  # remove FC layer
-
     def forward(self, x):
         x = self.conv1(x)
         x = self.bn1(x)
@@ -388,7 +358,6 @@ class ResNetTrunk(ResNet):
         x = self.layer3(x)
         x = self.layer4(x)
         return x
-
 def get_pretrained_url(key):
     URL_PREFIX = "https://github.com/lunit-io/benchmark-ssl-pathology/releases/download/pretrained-weights"
     model_zoo_registry = {
@@ -398,7 +367,6 @@ def get_pretrained_url(key):
     }
     pretrained_url = f"{URL_PREFIX}/{model_zoo_registry.get(key)}"
     return pretrained_url
-
 
 def resnet50(pretrained, progress, key, **kwargs):
     model = ResNetTrunk(Bottleneck, [3, 4, 6, 3], **kwargs)
@@ -410,173 +378,138 @@ def resnet50(pretrained, progress, key, **kwargs):
         print(verbose)
     return model
 
-pretrained_url = get_pretrained_url(model_config.key)
-pretrained_resnet = model_config.pretrained_resnet
-#%%
+if model_config.pretrained_resnet:
+    pretrained_url = get_pretrained_url(model_config.key)
+    pretrained_resnet = model_config.pretrained_resnet
 def build_model():
     if pretrained_resnet:
-        model = smp.UnetPlusPlus(encoder_name="resnet50", encoder_weights=model_config.key, activation='sigmoid',
-                             encoder_depth = 5, decoder_channels = [512, 256, 128, 64, 32],in_channels=3, classes=1, decoder_attention_type = "scse", decoder_use_batchnorm=True, aux_params={"classes": 1, "pooling": "max","dropout": 0.5})
-    else: #se_resnext101_32x4d
-        model = smp.UnetPlusPlus(encoder_name="tu-efficientnetv2_rw_m", encoder_weights=None, encoder_depth = 5, decoder_channels = [512, 256, 128, 64, 32], activation='sigmoid',
+        model = smp.UnetPlusPlus(encoder_name="resnet50", encoder_weights=model_config.key, encoder_depth = 5,
+                                 decoder_channels = [512, 256, 128, 64, 32], activation='sigmoid', in_channels=3, classes=1,
+                                 decoder_attention_type = "scse", decoder_use_batchnorm=True,
+                                 aux_params={"classes": 1, "pooling": "max","dropout": 0.5})
+    else: #try different encoders
+        model = smp.UnetPlusPlus(encoder_name="se_resnext50_32x4d", encoder_weights=None, encoder_depth = 5,
+                                 decoder_channels = [512, 256, 128, 64, 32], activation='sigmoid',
                                  in_channels=3, classes=1, decoder_attention_type="scse", decoder_use_batchnorm=True,
-                                 aux_params={"classes": 1, "pooling": "max", "dropout": 0.5}) #tu-efficientnetv2_rw_m
-    model.to(model_config.device)  # model to gpu
+                                 aux_params={"classes": 1, "pooling": "max", "dropout": 0.5})
+    model.to(model_config.device)  #move model to gpu
     return model
 
+#try different loss functions, all return raw logits:
 dice_loss_func = smp.losses.DiceLoss(mode='binary', from_logits= True)
-bce_loss_func = smp.losses.SoftBCEWithLogitsLoss(pos_weight=torch.tensor([20],dtype=torch.int64).to(model_config.device))
-# both loss funcs from logits
-# iou_loss_func = smp.losses.JaccardLoss(mode='binary',from_logits = True)
+iou_loss_func = smp.losses.JaccardLoss(mode='binary',from_logits = True)
+# bce_loss_func = smp.losses.SoftBCEWithLogitsLoss(pos_weight=torch.tensor([20],dtype=torch.int64).to(model_config.device))
 # focal_loss_func = smp.losses.FocalLoss(mode='binary',alpha=0.95, gamma=2)
 # tversky_loss_func = smp.losses.TverskyLoss(mode='binary',from_logits=True,alpha=0.3,beta=0.7,gamma=1.33)
-def loss_func(y_pred, y_true):  #weighted avg of the two, maybe explore different weighting if possible?
-    # return dice_loss_func(y_pred,y_true)
-    return 0.5 * dice_loss_func(y_pred,y_true) + 0.5 * bce_loss_func(y_pred,y_true)
-    # return tversky_loss_func(y_pred, y_true)
-    # return 0.2 * focal_loss_func(y_pred,y_true) + 0.5 * dice_loss_func(y_pred,y_true) + 0.2 * iou_loss_func(y_pred,y_true)
-    # return iou_loss_func(y_pred, y_true)
-    # return  model_config.dice_alpha* dice_loss_func(y_pred,y_true) + model_config.bce_alpha * bce_loss_func(y_pred,y_true)
-#%%
+def loss_func(y_pred, y_true):  #weighted avg of the two, also explore different weighting and combinations if possible.
+    return 0.5 * dice_loss_func(y_pred,y_true) + 0.5 * iou_loss_func(y_pred,y_true)
+
+#code to train one epoch:
 def epoch_train(model, optimizer, scheduler, dataloader, device, epoch):
-    model.train()  # set mode to train
+    model.train()  #set mode to train
     dataset_size = 0  #initialize
     running_loss = 0.0  #initialize
-    scaler = GradScaler()  # enable GradScaler
+    scaler = GradScaler()  #enable GradScaler for gradient scaling, necessary for prevention of underflow of using fp16 using autocast below
     pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='Train', colour='red')
     for idx, (images, masks) in pbar:
-        images = images.to(device, dtype=torch.float)  # move tensor to gpu
-        masks = masks.to(device, dtype=torch.float)  # move tensor to gpu
-        batch_size = model_config.train_batch_size  # return batch size N.
-
-        with autocast(enabled=True, dtype=torch.float16):  # enable autocast for forward pass
-            y_pred, _ = model(images)  # run this if aux_params (dropout, maxpool, attention)
-            # print("mean of y_pred is {}".format(torch.mean(torch.squeeze(y_pred))))
-            # print("max of y_pred is {}".format(torch.max(torch.squeeze(y_pred))))
-            # print("min of y_pred is {}".format(torch.min(torch.squeeze(y_pred))))
-            # print("mean of masks is {}".format(torch.mean(torch.squeeze(masks))))
-            # sub_value = torch.mean(torch.squeeze(masks)) - torch.mean(torch.squeeze(y_pred))
-            # print("mean of masks minus mean of y_pred is {}".format(sub_value))
-            # y_pred = model(images) # forward pass, get y_pred from input
-            # print(y_pred[0].dtype)
-            # print(masks[0].dtype)
-            # print(np.unique(masks[0].cpu().numpy(), return_counts=True))
-            loss = loss_func(y_pred, masks)  # compute losses from y_pred
-            loss = loss / model_config.iters_to_accumulate  # need to normalize since accumulating gradients
-        scaler.scale(loss).backward()  # accumulates the scaled gradients
-
-        if (idx + 1) % model_config.iters_to_accumulate == 0:  # scale updates should only happen at batch granularity
-            scaler.step(optimizer)
-            scaler.update()  # update scale for next iteration
-            optimizer.zero_grad()  # zero the accumulated scaled gradients
-            scheduler.step()  # change lr,make sure to call this after scaler.step
-
-        running_loss += (loss.item() * batch_size)  # update current running loss for all images in batch
-        dataset_size += batch_size  # update current datasize
-
-        epoch_loss = running_loss / dataset_size  # get current epoch average loss
+        images = images.to(device, dtype=torch.float)  #move tensor to gpu
+        masks = masks.to(device, dtype=torch.float)  #move tensor to gpu
+        batch_size = model_config.train_batch_size  #return batch size N.
+        with autocast(enabled=True, dtype=torch.float16):  #enable autocast for fp16 training, faster forward pass
+            y_pred, _ = model(images)  #forward pass
+            loss = loss_func(y_pred, masks)  #compute losses from y_pred
+            loss = loss / model_config.iters_to_accumulate  #need to normalize since accumulating gradients
+        scaler.scale(loss).backward()  #backward pass, make sure it is not within autocast
+        if (idx + 1) % model_config.iters_to_accumulate == 0 :  #scale updates should only happen at each # of iters to accumulate
+            scaler.step(optimizer) #take optimizer step
+            scaler.update()  #update scale for next iteration
+            optimizer.zero_grad()  #zero the accumulated scaled gradients
+            scheduler.step()  #change lr,make sure to call this after scaler.step
+        running_loss += (loss.item() * batch_size)  #update current running loss for all images in batch
+        dataset_size += batch_size  #update current datasize
+        epoch_loss = running_loss / dataset_size  #get current epoch average loss
         current_lr = optimizer.param_groups[0]['lr']
         pbar.set_postfix(train_loss=f'{epoch_loss:0.4f}',
-                         lr=f'{current_lr:0.5f}')
-
+                         lr=f'{current_lr:0.5f}') #print current epoch loss and lr
     torch.cuda.empty_cache()  #clear gpu memory after every epoch
-    gc.collect()
-
+    gc.collect() #collect garbage
     return epoch_loss  #return loss for this epoch
 
+#code to visualize images during validation to check training is progressing:
 def visualize_images_validation(image,mask,y_pred,epoch):
-
     fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15,15))
     fig.tight_layout()
-
     image = image.cpu().numpy()
     axes[0].imshow(image.transpose(1,2,0).astype(np.uint8))
     axes[0].set_title("H&E Validation Image for epoch {}".format(epoch))
     axes[0].axis("off")
-
     mask = mask.cpu().numpy()
     axes[1].imshow(mask.squeeze(0),cmap="gray")
     axes[1].set_title("Ground Truth Validation Mask for epoch {}")
     axes[1].axis("off")
-
     y_pred = y_pred.cpu().numpy()
     axes[2].imshow(y_pred.squeeze(0),cmap="gray")
     axes[2].set_title("Model Predicted Validation Mask for epoch {}".format(epoch))
     axes[2].axis("off")
-
     plt.show()
-@torch.no_grad()  # disable gradient calc for validation
+@torch.no_grad()  #disable gradient calc for validation
 def epoch_valid(model, dataloader, device, epoch):
-    model.eval()  # set mode to eval
+    model.eval()  #set mode to eval
     dataset_size = 0  #initialize
     running_loss = 0.0  #initialize
-    valid_ap_history = []
+    valid_ap_history = [] #initialize
     pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='Validation', colour='red')
     for idx, (images, masks) in pbar:
-        images = images.to(device, dtype=torch.float)
-        masks = masks.to(device, dtype=torch.float)
-        y_pred, _ = model(images)  # run this if aux_params (dropout, maxpool, attention)
-        # print("mean of y_pred is {}".format(torch.mean(torch.squeeze(y_pred))))
-        # print("max of y_pred is {}".format(torch.max(torch.squeeze(y_pred))))
-        # print("min of y_pred is {}".format(torch.min(torch.squeeze(y_pred))))
-        # print("mean of masks is {}".format(torch.mean(torch.squeeze(masks))))
-        # sub_value = torch.mean(torch.squeeze(masks)) - torch.mean(torch.squeeze(y_pred))
-        # print("mean of masks minus mean of y_pred is {}".format(sub_value))
-        if (idx == 0 or idx == 2 or idx == 4) and epoch % 5 == 0: #visualize random images to make sure training is going at least okay
-            image = images[0]
-            mask = masks[0]
-            y_pred_prob = nn.Sigmoid()(y_pred)
-            y_pred_ind = y_pred_prob[0] #1st image of batch
-            visualize_images_validation(image,mask,y_pred_ind,epoch)
-        loss = loss_func(y_pred, masks)
+        images = images.to(device, dtype=torch.float) #move tensor to gpu
+        masks = masks.to(device, dtype=torch.float) #move tensor to gpu
+        y_pred, _ = model(images)  #forward pass
+        if (idx == 0 or idx == 2) and epoch % 4 == 0: #visualize random images at every 4 epochs to make sure training is progressing
+            image = images[0] #first H&E image of batch
+            mask = masks[0] #first ground truth mask of batch
+            y_pred_prob = nn.Sigmoid()(y_pred) #get prob by applying sigmoid to logit y_pred
+            y_pred_ind = y_pred_prob[0] #get model prediction of prob, same image as ground truth above
+            visualize_images_validation(image,mask,y_pred_ind,epoch) #visualize H&E image, ground truth segmentation, and predicted segmentation
+        loss = loss_func(y_pred, masks) #calculate loss
         running_loss += (loss.item() * model_config.valid_batch_size)  #update current running loss
         dataset_size += model_config.valid_batch_size  #update current datasize
         epoch_loss = running_loss / dataset_size  #divide epoch loss by current datasize
-
-        # y_pred = nn.Sigmoid()(
-        #     y_pred)  #sigmoid for multi-class, smp loss function has sigmoid in it, but iou_map doesn't have sigmoid.
-        # print(torch.max(torch.squeeze(y_pred[0])))
-        # print(torch.min(torch.squeeze(y_pred[0])))
-        # print(torch.mean(torch.squeeze(y_pred[0])))
         masks = masks.squeeze(0)
-        y_pred_prob = nn.Sigmoid()(y_pred)
-        valid_ap = iou_map(masks.cpu().numpy(), y_pred_prob.cpu().numpy(), verbose=0)
+        y_pred_prob = nn.Sigmoid()(y_pred) #get prob by applying sigmoid to logit y_pred
+        valid_ap = iou_map(masks.cpu().numpy(), y_pred_prob.cpu().numpy(), verbose=0) #find average precision (AP) @IOU = 0.6
         valid_ap_history.append(valid_ap)
         current_lr = optimizer.param_groups[0]['lr']
         pbar.set_postfix(valid_loss=f'{epoch_loss:0.3f}',
                          lr=f'{current_lr:0.4f}')
-    valid_ap_history = np.mean(valid_ap_history, axis=0)
+    valid_ap_history = np.mean(valid_ap_history, axis=0) #store mean AP
     torch.cuda.empty_cache()  #clear gpu memory after every epoch
-    gc.collect()
+    gc.collect() #collect garbage
 
-    return epoch_loss, valid_ap_history  #return loss and valid_score_history for this epoch
+    return epoch_loss, valid_ap_history  #return loss and AP for this epoch
 
-
+#function that utilizes above train and validation function to iterate them over training epochs, master train code.
 def run_training(model, optimizer, scheduler, device, num_epochs):
-    start = time.time()  # measure time
-    best_model_wts = copy.deepcopy(model.state_dict())  #deepcopy
-    best_ap = 0  # initial best score
-    best_epoch = -1  # initial best epoch
-    history = defaultdict(list)  # history defaultdict to store relevant variables
+    start = time.time()  #measure time
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_ap = 0  #initial best AP
+    best_epoch = -1  #initial best epoch
+    history = defaultdict(list)  #history defaultdict to store relevant variables
 
-    for epoch in range(1, num_epochs + 1):
+    for epoch in range(1, num_epochs + 1): #iter over num total epochs
         gc.collect()
         print("Current Epoch {} / Total Epoch {}".format(epoch, num_epochs))
         print(f'Epoch {epoch}/{num_epochs}', end='')
         train_loss = epoch_train(model, optimizer, scheduler,
                                  dataloader=train_dataloader,
-                                 device=model_config.device, epoch=epoch)
+                                 device=model_config.device, epoch=epoch) #train one epoch
         valid_loss, valid_ap_history = epoch_valid(model, dataloader=val_dataloader,
                                                                         device=model_config.device,
-                                                                        epoch=epoch)
+                                                                        epoch=epoch) #valid one epoch
         valid_ap = valid_ap_history
         history['Train Loss'].append(train_loss)
         history['Valid Loss'].append(valid_loss)
         history['Valid AP'].append(valid_ap)
-
         print(f'Valid AP: {valid_ap:0.4f}')
-
-        # if dice score improves, save the best model
+        #if AP improves, save the best model
         if valid_ap >= best_ap:
             print(f"Valid Score Improved ({best_ap:0.4f} ---> {valid_ap:0.4f})")
             best_ap = valid_ap
@@ -585,11 +518,12 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
             PATH = os.path.join(model_config.model_save_directory, f"best_epoch-{model_config.current_fold:02d}.pt")
             if not os.path.exists(model_config.model_save_directory):
                 os.makedirs(model_config.model_save_directory)
-            torch.save(model.state_dict(), PATH)  #current directory (on kaggle)
+            torch.save(model.state_dict(), PATH)
             print("Model Saved!")
         print(f'Best AP so far: {best_ap:0.4f}')
         print(f'Best AP at epoch #: {best_epoch:d}')
-        # save the most recent model
+
+        #also save the most recent model
         last_model_wts = copy.deepcopy(model.state_dict())
         PATH = os.path.join(model_config.model_save_directory, f"latest_epoch-{model_config.current_fold:02d}.pt")
         if not os.path.exists(model_config.model_save_directory):
@@ -602,41 +536,28 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
         time_elapsed // 3600, (time_elapsed % 3600) // 60))
     print("Best AP@ 0.6IOU: {:.4f}".format(best_ap))
 
-    # load best model weights
+    #load best model weights
     model.load_state_dict(best_model_wts)
 
     return model, history
-#%%
-model = build_model()
-optimizer = optim.Adam(model.parameters(),
-                       lr=model_config.learning_rate,
-                       weight_decay=model_config.weight_decay)  # default learning rate
-if model_config == "CosineAnnealingLR":  # change to CosineAnnealingLR
-    scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=model_config.T_max,
-                                               eta_min=model_config.eta_min)
-# print(model)
-#%%
-# Run Training!
 
-train_dataloader, valid_dataloader = load_dataset()
-model = build_model()
-model.segmentation_head[2] = Identity()
+#finally run training:
+train_dataloader, valid_dataloader = load_dataset() #load datasets
+model = build_model() #build model
+model.segmentation_head[2] = Identity() #remove sigmoid from final seg head since we want raw logits as final output
 print(model)
 optimizer = optim.Adam(model.parameters(),
                        lr=model_config.learning_rate,
-                       weight_decay=model_config.weight_decay)  # default learning rate
-
-if model_config.scheduler == "CosineAnnealingLR":  # change to CosineAnnealingLR
-    scheduler = lr_scheduler.CosineAnnealingLR(optimizer,
+                       weight_decay=model_config.weight_decay)  #initialize optimizer
+scheduler = lr_scheduler.CosineAnnealingLR(optimizer,
                                                T_max=model_config.T_max,
-                                               eta_min=model_config.eta_min)
+                                               eta_min=model_config.eta_min) #initialize LR scheduler
 print("Training for Fold {}".format(model_config.current_fold))
 model, history = run_training(model, optimizer, scheduler,
                               device=model_config.device,
-                              num_epochs=model_config.epochs)
+                              num_epochs=model_config.epochs) #run training for each fold
 pkl_save_path = os.path.join(model_config.model_save_directory, 'history.pickle')
-#save history:
+#save history as pkl:
 with open(pkl_save_path, 'wb') as file:
     pickle.dump(history, file)
 
-#%%
