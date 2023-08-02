@@ -26,7 +26,6 @@ warnings.filterwarnings("ignore")
 #configurations for inference:
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 model_path = '/kaggle/input/unet-best_epoch-00.pt'
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
 base_dir = Path('/kaggle/input/hubmap-hacking-the-human-vasculature')
 
 #flags for inference:
@@ -34,6 +33,8 @@ debug = False #if True, debugging mode, which performs inference on training set
 use_TTA = True #if True, use test-time-augmentation (TTA) during inference
 binary_threshold = 0.5 #binary threshold for predicted probability mask
 plot_predicted_image = True #if True, plot predicted mask as an image during inference
+
+#helper function to convert inferenced instance of a binary mask to OID challenge encoding ascii text, which is the competition-required submission format
 def encode_binary_mask(mask: np.ndarray) -> t.Text:
   """Converts a binary mask into OID challenge encoding ascii text."""
 

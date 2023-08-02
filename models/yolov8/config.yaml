@@ -1,0 +1,10 @@
+#YAML file that holds train and validation file paths, names of classes, and number of classes (nc).
+#This file is necessary for training and must be passed to model.train
+
+train: \\fatherserverdw\Kevin\hubmap\yolov8\train\images
+val: \\fatherserverdw\Kevin\hubmap\yolov8\val\images
+
+names:
+    0: blood_vessel
+
+nc: 1
