@@ -1,6 +1,5 @@
-#Full training code for UNet architecture with different types of encoders that you can try using the segmentation-models-pytorch module. Each function and important
-#lines of code will have comments in them.
-
+#%%
+### This is a modified version of train.py, as it uses Ray train and tune to perform hyperparameter tuning on a predefined parameter space containing the variables and its values to tune. The metric to tune for is average precision @ 0.6 IOU.
 #first import all of the packages required in this entire project:
 import numpy as np
 import pandas as pd
@@ -9,11 +8,8 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 import random
-from glob import glob
 import copy
-import joblib
 from tqdm import tqdm
 tqdm.pandas()
 import gc
@@ -29,7 +25,6 @@ from torch.nn import Identity
 matplotlib.style.use('ggplot')
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-from sklearn.model_selection import StratifiedKFold
 Image.MAX_IMAGE_PIXELS = None
 pd.set_option('display.float_format', '{:.2f}'.format)
 import segmentation_models_pytorch as smp
@@ -37,83 +32,54 @@ from torchvision.models.resnet import Bottleneck, ResNet
 from torchvision import transforms
 from randstainna import RandStainNA
 import pickle
-import torchvision.transforms.functional as F
-
-
-#load train_df for blood_vessel
-train_df = pd.read_excel(r"\\fatherserverdw\Kevin\hubmap\unet++\bv_train_df.xlsx")
-find_mean_std_dataset = False  #already found it, so False. Turn to true if you want to find std of mean for the first time.
-
-if find_mean_std_dataset:
-    class HubmapDataset(Dataset):
-        def __init__(self, df, transform=None):
-            self.df = df
-            self.directory = df["image_path"].tolist()
-            self.transform = transform
-        def __len__(self):
-            return int(len(self.directory))
-        def __getitem__(self, idx):
-            path = self.directory[idx]
-            image = cv2.imread(path, cv2.COLOR_BGR2RGB)
-            if self.transform is not None:
-                image = self.transform(image=image)['image']
-            return image
-
-    device = torch.device('cpu')
-    num_workers = 0
-    image_size = 512
-    batch_size = 4
-    augmentations = A.Compose([A.Resize(height=image_size, width=image_size),
-                               A.Normalize(mean=(0, 0, 0), std=(1, 1, 1)),
-                               ToTensorV2()])
-    unstain2stain_dataset = HubmapDataset(df=train_df, transform=augmentations)  # data loader
-    image_loader = DataLoader(unstain2stain_dataset,
-                              batch_size=batch_size,
-                              shuffle=False,
-                              num_workers=num_workers,
-                              pin_memory=True)
-    images = next(iter(image_loader))
-    print("Images have a tensor size of {}.".
-          format(images.size()))
-    psum = torch.tensor([0.0, 0.0, 0.0])
-    psum_sq = torch.tensor([0.0, 0.0, 0.0])
-    #loop through images
-    for inputs in tqdm(image_loader, colour='red'):
-        psum += inputs.sum(axis=[0, 2, 3])  # sum over axis 1
-        psum_sq += (inputs ** 2).sum(axis=[0, 2, 3])  # sum over axis 1
-    #pixel count
-    count = len(train_df) * image_size * image_size
-    #mean and std
-    total_mean = psum / count
-    total_var = (psum_sq / count) - (total_mean ** 2)
-    total_std = torch.sqrt(total_var)
-    #final result
-    print('mean: ' + str(total_mean))
-    print('std:  ' + str(total_std))
-# results:
-# mean: tensor([0.6801, 0.4165, 0.6313])
-# std:  tensor([0.1308, 0.2094, 0.1504])
-
-#all model hyperparameters are stored here:
+from typing import Dict
+# import ray:
+import ray
+from ray import tune
+from ray.air import session
+import ray.train as train
+from ray.train.torch import TorchTrainer
+from ray.air.config import ScalingConfig
+from ray.air import Checkpoint, RunConfig
+from ray.train.torch.config import TorchConfig
+from ray.tune.tuner import Tuner, TuneConfig
+from ray.tune.schedulers import AsyncHyperBandScheduler
+#%%
+#all flags/model hyperparameters are stored here:
 class model_config:
+    ray_train = False
+    ray_tune = not ray_train
     current_fold = 0 #number of CV fold to train
     key = "BT" #key of resnet model to train if pretrained_resnet = True
     pretrained_resnet = False #whether to train using a pretrained resnet model
-    use_randstainNA = True #whether to use randstainNA for image augmentation & normalization
+    use_randstainNA = False #whether to use randstainNA for image augmentation & normalization
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    model_save_directory = os.path.join(os.getcwd(), "model", "UNet_baseline")  #assuming os.getcwd is the current training script directory
     seed = 42 #random seed
-    train_batch_size = 8
-    valid_batch_size = 16
-    epochs = 100
-    learning_rate = 0.0014 # 0.001 for bs=16
+    batch_size = 8
+    epochs = 10
+    learning_rate = 1.4e-3 # 1e-3 for bs=16
     scheduler = "CosineAnnealingLR" #explore different lr schedulers
     num_training_samples = 5499
-    T_max = int(num_training_samples / train_batch_size * epochs)  #number of iterations for a full cycle, need to change for different # of iterations (iteration = batch size).
+    T_max = int(num_training_samples / batch_size * epochs)  #number of iterations for a full cycle, need to change for different # of iterations (iteration = batch size).
     weight_decay = 1e-6  #explore different weight decay (for Adam optimizer)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    iters_to_accumulate = max(1, 32 // train_batch_size)  #for scaling accumulated gradients, should never be <1
+    iters_to_accumulate = max(1, 32 // batch_size)  #for scaling accumulated gradients, should never be <1
     eta_min = 1e-5
-    model_save_directory = os.path.join(os.getcwd(), "model", "UNet_baseline")  #assuming os.getcwd is the current training script directory
+    binary_threshold = 0.1
+    alpha = 0.5
+    beta = 1-alpha
 
+#%%
+#config dict for ray train:
+if model_config.ray_train:
+    hyp_config = {"batch_size": model_config.batch_size, "epochs": model_config.epochs, "learning_rate": model_config.learning_rate,
+              "T_max": model_config.T_max, "weight_decay": model_config.weight_decay, "eta_min": model_config.eta_min, "binary_threshold": model_config.binary_threshold, "alpha": model_config.alpha, "beta": model_config.beta}
+
+#parameter search space for ray tune:
+if model_config.ray_tune: #let's first tune learning rate, binary threshold, and loss function weightings alpha and beta:
+    search_space = {"batch_size": model_config.batch_size,"epochs": model_config.epochs, "learning_rate": tune.grid_search([1.4e-2,1.4e-3,1.4e-4]),
+    "T_max": model_config.T_max, "weight_decay": model_config.weight_decay, "eta_min": model_config.eta_min, "binary_threshold": tune.grid_search([0.1,0.3,0.5,0.7]), "alpha": tune.grid_search([0.3,0.5,0.7]), "beta": tune.sample_from(lambda x: 1 - x.config.alpha)}
+#%%
 #sets the seed of the entire notebook so results are the same every time we run for reproducibility
 def set_seed(seed=42):
     np.random.seed(seed)  #numpy specific random
@@ -156,8 +122,8 @@ else:
         A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)),
         ToTensorV2() #V2 converts tensor to CHW automatically
     ])
-    val_transforms = A.Compose([ToTensorV2()])
-
+    val_transforms = A.Compose([A.Normalize(mean=(0.6801, 0.4165, 0.6313), std=(0.1308, 0.2094, 0.1504)),ToTensorV2()])
+#%%
 class TrainDataSet(Dataset):
     #initialize df, label, imagepath, transforms:
     def __init__(self, df, transforms=None, label=True):
@@ -208,57 +174,19 @@ class TrainDataSet(Dataset):
         return image, mask  #return tensors of equal dtype and size
         #image is size 3x512x512 and mask is size 1x512x512 (need dummy dimension to match dimension)
 
-#define dataloading function to use above dataset to return train and val dataloaders:
+#function to convert images and masks to dict
+def convert_batch_to_numpy(batch) -> Dict[str, np.ndarray]:
+    images = np.stack([np.array(image) for image, _ in batch["item"]])
+    masks = np.stack([np.array(masks) for _, masks in batch["item"]])
+    return {"image": images, "mask": masks}
+
+#load dataset
 def load_dataset():
     model_df_train = new_df_train.reset_index(drop=True)
     model_df_val = new_df_val.reset_index(drop=True)
     train_dataset = TrainDataSet(df=model_df_train, transforms=train_transforms)
     val_dataset = TrainDataSet(df=model_df_val, transforms=val_transforms)
-    train_dataloader = DataLoader(dataset=train_dataset,
-                                  batch_size=model_config.train_batch_size,
-                                  #pin_memory= true allows faster data transport from cpu to gpu
-                                  num_workers=0, pin_memory=True, shuffle=False)
-    val_dataloader = DataLoader(dataset=val_dataset,
-                                batch_size=model_config.valid_batch_size,
-                                num_workers=0, pin_memory=True, shuffle=False)
-    return train_dataloader, val_dataloader #return train and val dataloaders
-
-#test to see if dataloaders return desired batch size and visualize images to see if images are indeed transformed:
-train_dataloader, val_dataloader = load_dataset()
-images, labels = next(iter(train_dataloader))
-print("Images have a tensor size of {}, and Labels have a tensor size of {}".
-      format(images.size(), labels.size()))
-images, labels = next(iter(val_dataloader))
-print("Images have a tensor size of {}, and Labels have a tensor size of {}".
-      format(images.size(), labels.size()))
-def visualize_images(dataset, num_images):
-    indices = random.sample(range(len(dataset)), num_images)
-    fig, axes = plt.subplots(nrows=num_images, ncols=2, figsize=(10, 12))
-    fig.tight_layout()
-    for i, ax_row in enumerate(axes):
-        index = indices[i]
-        image, mask = dataset[index]
-        if dataset.transforms is not None and not model_config.use_randstainNA:
-            ax_row[0].imshow(image)
-        else:
-            ax_row[0].imshow(image.permute(1,2,0))
-        ax_row[0].set_title("Image")
-        ax_row[0].axis("off")
-
-        if dataset.transforms is not None and not model_config.use_randstainNA:
-            ax_row[1].imshow(mask, cmap="gray")
-        else:
-            ax_row[1].imshow(mask.squeeze(0), cmap="gray")
-        ax_row[1].set_title("Mask")
-        ax_row[1].axis("off")
-    plt.show()
-
-visualize = True #always check if transforms properly applied before training
-if visualize:
-    original_dataset = TrainDataSet(df=new_df_train, transforms=None)
-    visualize_images(original_dataset, num_images=5)
-    train_dataset = TrainDataSet(df=new_df_train, transforms=train_transforms)
-    visualize_images(train_dataset, num_images=5)
+    return train_dataset, val_dataset  #return train and val datasets
 
 #below three functions compute_iou, precision_at, and iou_map are functions to calculate average precision @IOU = 0.6 (the competition metric)
 #credits to: https://www.kaggle.com/code/theoviel/competition-metric-map-iou
@@ -272,7 +200,7 @@ def compute_iou(labels, y_pred):
         np array: IoU matrix, of size true_objects x pred_objects.
     """
     true_objects = len(np.unique(labels))
-    y_pred = y_pred > 0.1 #change this threshold maybe
+    y_pred = y_pred > hyp_config.binary_threshold #change this threshold maybe
     y_pred = y_pred * 1
     pred_objects = len(np.unique(y_pred))
     #compute intersection between all objects
@@ -391,7 +319,7 @@ def build_model():
                                  decoder_channels = [512, 256, 128, 64, 32], activation='sigmoid',
                                  in_channels=3, classes=1, decoder_attention_type="scse", decoder_use_batchnorm=True,
                                  aux_params={"classes": 1, "pooling": "max", "dropout": 0.5})
-    model.to(model_config.device)  #move model to gpu
+    model.segmentation_head[2] = Identity() #remove sigmoid from final seg head since we want raw logits as final output
     return model
 
 #try different loss functions, all return raw loss logits:
@@ -400,20 +328,22 @@ iou_loss_func = smp.losses.JaccardLoss(mode='binary',from_logits = True)
 # bce_loss_func = smp.losses.SoftBCEWithLogitsLoss(pos_weight=torch.tensor([20],dtype=torch.int64).to(model_config.device))
 # focal_loss_func = smp.losses.FocalLoss(mode='binary',alpha=0.95, gamma=2)
 # tversky_loss_func = smp.losses.TverskyLoss(mode='binary',from_logits=True,alpha=0.3,beta=0.7,gamma=1.33)
+
 def loss_func(y_pred, y_true):  #weighted avg of the two, also explore different weighting and combinations if possible.
-    return 0.5 * dice_loss_func(y_pred,y_true) + 0.5 * iou_loss_func(y_pred,y_true)
+    return hyp_config.alpha * dice_loss_func(y_pred,y_true) + hyp_config.beta * iou_loss_func(y_pred,y_true)
 
 #code to train one epoch:
-def epoch_train(model, optimizer, scheduler, dataloader, device, epoch):
+def epoch_train(model, optimizer, scheduler):
     model.train()  #set mode to train
     dataset_size = 0  #initialize
     running_loss = 0.0  #initialize
     scaler = GradScaler()  #enable GradScaler for gradient scaling, necessary for prevention of underflow of using fp16 using autocast below
-    pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='Train', colour='red')
-    for idx, (images, masks) in pbar:
-        images = images.to(device, dtype=torch.float)  #move tensor to gpu
-        masks = masks.to(device, dtype=torch.float)  #move tensor to gpu
-        batch_size = model_config.train_batch_size  #return batch size N.
+    train_dataset_shard = session.get_dataset_shard("train") #ray method of dataloaders, getting each batch
+    train_dataset_batches = train_dataset_shard.iter_torch_batches(batch_size=model_config.batch_size) #ray method of dataloaders, getting each batch
+    pbar = tqdm(enumerate(train_dataset_batches),colour='red',desc='Training')
+    for idx, batch in pbar:
+        batch_size = model_config.batch_size  #return batch size N.
+        images,masks = batch["image"],batch["mask"]
         with autocast(enabled=True, dtype=torch.float16):  #enable autocast for fp16 training, faster forward pass
             y_pred, _ = model(images)  #forward pass
             loss = loss_func(y_pred, masks)  #compute losses from y_pred
@@ -434,51 +364,27 @@ def epoch_train(model, optimizer, scheduler, dataloader, device, epoch):
     gc.collect() #collect garbage
     return epoch_loss  #return loss for this epoch
 
-#code to visualize images during validation to check training is progressing:
-def visualize_images_validation(image,mask,y_pred,epoch):
-    fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15,15))
-    fig.tight_layout()
-    image = image.cpu().numpy()
-    axes[0].imshow(image.transpose(1,2,0).astype(np.uint8))
-    axes[0].set_title("H&E Validation Image for epoch {}".format(epoch))
-    axes[0].axis("off")
-    mask = mask.cpu().numpy()
-    axes[1].imshow(mask.squeeze(0),cmap="gray")
-    axes[1].set_title("Ground Truth Validation Mask for epoch {}")
-    axes[1].axis("off")
-    y_pred = y_pred.cpu().numpy()
-    axes[2].imshow(y_pred.squeeze(0),cmap="gray")
-    axes[2].set_title("Model Predicted Validation Mask for epoch {}".format(epoch))
-    axes[2].axis("off")
-    plt.show()
 @torch.no_grad()  #disable gradient calc for validation
-def epoch_valid(model, dataloader, device, epoch):
+def epoch_valid(model):
     model.eval()  #set mode to eval
     dataset_size = 0  #initialize
     running_loss = 0.0  #initialize
     valid_ap_history = [] #initialize
-    pbar = tqdm(enumerate(dataloader), total=len(dataloader), desc='Validation', colour='red')
-    for idx, (images, masks) in pbar:
-        images = images.to(device, dtype=torch.float) #move tensor to gpu
-        masks = masks.to(device, dtype=torch.float) #move tensor to gpu
+    val_dataset_shard = session.get_dataset_shard("valid") #ray method of dataloaders, getting each batch
+    val_dataset_batches = val_dataset_shard.iter_torch_batches(batch_size=model_config.batch_size) #ray method of dataloaders, getting each batch
+    pbar = tqdm(enumerate(val_dataset_batches),colour='red',desc='Validating')
+    for idx, batch in pbar:
+        images,masks = batch["image"],batch["mask"]
         y_pred, _ = model(images)  #forward pass
-        if (idx == 0 or idx == 2) and epoch % 4 == 0: #visualize random images at every 4 epochs to make sure training is progressing
-            image = images[0] #first H&E image of batch
-            mask = masks[0] #first ground truth mask of batch
-            y_pred_prob = nn.Sigmoid()(y_pred) #get prob by applying sigmoid to logit y_pred
-            y_pred_ind = y_pred_prob[0] #get model prediction of prob, same image as ground truth above
-            visualize_images_validation(image,mask,y_pred_ind,epoch) #visualize H&E image, ground truth segmentation, and predicted segmentation
         loss = loss_func(y_pred, masks) #calculate loss
-        running_loss += (loss.item() * model_config.valid_batch_size)  #update current running loss
-        dataset_size += model_config.valid_batch_size  #update current datasize
+        running_loss += (loss.item() * model_config.batch_size)  #update current running loss
+        dataset_size += model_config.batch_size #update current datasize
         epoch_loss = running_loss / dataset_size  #divide epoch loss by current datasize
         masks = masks.squeeze(0)
         y_pred_prob = nn.Sigmoid()(y_pred) #get prob by applying sigmoid to logit y_pred
         valid_ap = iou_map(masks.cpu().numpy(), y_pred_prob.cpu().numpy(), verbose=0) #find average precision (AP) @IOU = 0.6
         valid_ap_history.append(valid_ap)
-        current_lr = optimizer.param_groups[0]['lr']
-        pbar.set_postfix(valid_loss=f'{epoch_loss:0.3f}',
-                         lr=f'{current_lr:0.4f}')
+        pbar.set_postfix(valid_loss=f'{epoch_loss:0.3f}')
     valid_ap_history = np.mean(valid_ap_history, axis=0) #store mean AP
     torch.cuda.empty_cache()  #clear gpu memory after every epoch
     gc.collect() #collect garbage
@@ -486,24 +392,45 @@ def epoch_valid(model, dataloader, device, epoch):
     return epoch_loss, valid_ap_history  #return loss and AP for this epoch
 
 #function that utilizes above train and validation function to iterate them over training epochs, master train code.
-def run_training(model, optimizer, scheduler, device, num_epochs):
+#for ray, this is the "train_loop_per_worker" function to run in TorchTrainer()
+def run_training():
     start = time.time()  #measure time
+    print(f"Training for Fold {model_config.current_fold}")
+    # batch_size_per_worker = hyp_config["batch_size"] // session.get_world_size()
+    # print(f"batch_size_per_worker is {batch_size_per_worker}")
+    model = build_model() #build model
+    model = train.torch.prepare_model(model)
+    print(model)
     best_model_wts = copy.deepcopy(model.state_dict())
     best_ap = 0  #initial best AP
     best_epoch = -1  #initial best epoch
     history = defaultdict(list)  #history defaultdict to store relevant variables
+    if model_config.ray_train: # ray train configs
+        num_epochs = hyp_config["epochs"]
+        optimizer = optim.Adam(model.parameters(),
+                   lr=hyp_config["learning_rate"],
+                   weight_decay=hyp_config["weight_decay"])  #initialize optimizer
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer,
+                                               T_max=hyp_config["T_max"],
+                                               eta_min=hyp_config["eta_min"]) #initialize LR scheduler
+    else: # ray tune configs
+        num_epochs = search_space["epochs"]
+        optimizer = optim.Adam(model.parameters(),
+           lr=search_space["learning_rate"],
+           weight_decay=search_space["weight_decay"])  #initialize optimizer
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer,
+                                               T_max=search_space["T_max"],
+                                               eta_min=search_space["eta_min"]) #initialize LR scheduler
 
     for epoch in range(1, num_epochs + 1): #iter over num total epochs
         gc.collect()
-        print("Current Epoch {} / Total Epoch {}".format(epoch, num_epochs))
+        print(f"Current Epoch {epoch} / Total Epoch {num_epochs}")
         print(f'Epoch {epoch}/{num_epochs}', end='')
-        train_loss = epoch_train(model, optimizer, scheduler,
-                                 dataloader=train_dataloader,
-                                 device=model_config.device, epoch=epoch) #train one epoch
-        valid_loss, valid_ap_history = epoch_valid(model, dataloader=val_dataloader,
-                                                                        device=model_config.device,
-                                                                        epoch=epoch) #valid one epoch
+        train_loss = epoch_train(model, optimizer, scheduler) #train one epoch
+        valid_loss, valid_ap_history = epoch_valid(model) #valid one epoch
         valid_ap = valid_ap_history
+        checkpoint = Checkpoint.from_dict(dict(epoch=epoch, model=model.state_dict()))
+        session.report(dict(loss=valid_loss,ap = valid_ap),checkpoint=checkpoint)
         history['Train Loss'].append(train_loss)
         history['Valid Loss'].append(valid_loss)
         history['Valid AP'].append(valid_ap)
@@ -523,7 +450,6 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
         print(f'Best AP at epoch #: {best_epoch:d}')
 
         #also save the most recent model
-        last_model_wts = copy.deepcopy(model.state_dict())
         PATH = os.path.join(model_config.model_save_directory, f"latest_epoch-{model_config.current_fold:02d}.pt")
         if not os.path.exists(model_config.model_save_directory):
             os.makedirs(model_config.model_save_directory)
@@ -538,25 +464,35 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
     #load best model weights
     model.load_state_dict(best_model_wts)
 
-    return model, history
+    pkl_save_path = os.path.join(model_config.model_save_directory, 'history.pickle')
+    #save history as pkl:
+    with open(pkl_save_path, 'wb') as file:
+        pickle.dump(history, file)
+    print(f"Finished Training for fold {model_config.current_fold}")
+#%%
+# load datasets
+train_dataset, val_dataset = load_dataset() #load datasets
+train_dataset: ray.data.Dataset = ray.data.from_torch(train_dataset)
+val_dataset: ray.data.Dataset  = ray.data.from_torch(val_dataset)
+train_dataset= train_dataset.map_batches(convert_batch_to_numpy).materialize()
+val_dataset = val_dataset.map_batches(convert_batch_to_numpy).materialize()
 
-#finally run training:
-train_dataloader, valid_dataloader = load_dataset() #load datasets
-model = build_model() #build model
-model.segmentation_head[2] = Identity() #remove sigmoid from final seg head since we want raw logits as final output
-print(model)
-optimizer = optim.Adam(model.parameters(),
-                       lr=model_config.learning_rate,
-                       weight_decay=model_config.weight_decay)  #initialize optimizer
-scheduler = lr_scheduler.CosineAnnealingLR(optimizer,
-                                               T_max=model_config.T_max,
-                                               eta_min=model_config.eta_min) #initialize LR scheduler
-print("Training for Fold {}".format(model_config.current_fold))
-model, history = run_training(model, optimizer, scheduler,
-                              device=model_config.device,
-                              num_epochs=model_config.epochs) #run training for each fold
-pkl_save_path = os.path.join(model_config.model_save_directory, 'history.pickle')
-#save history as pkl:
-with open(pkl_save_path, 'wb') as file:
-    pickle.dump(history, file)
+# finally run training with ray train or run tuning with ray tune, depending on the flag:
+if model_config.ray_train:
+    trainer = TorchTrainer(
+        train_loop_per_worker=run_training,
+        train_loop_config=hyp_config,
+        datasets={"train": train_dataset, "valid" : val_dataset},
+        torch_config = TorchConfig(backend="gloo"), #change to gloo on windows, since no nccl
+        scaling_config=ScalingConfig(num_workers=1, use_gpu=True),
+    )
+    result = trainer.fit()
+    print(f"Last result: {result.metrics}")
+
+if model_config.ray_tune:
+    sched = AsyncHyperBandScheduler()
+    tuner = Tuner(trainable = run_training, param_space = search_space,tune_config = TuneConfig(metric = "ap",mode = "max", scheduler = sched, num_samples = 2), run_config= RunConfig(name = "tune_trial_1"))
+    results = tuner.fit()
+    print("Best config is:", results.get_best_result().config)
+    #%%
 

@@ -26,3 +26,7 @@ scikit-learn
 albumentations
 transformers
 evaluate
+ray
+# "ray[air]"
+# "ray[tune]"
+# "ray[data]"
